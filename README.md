@@ -41,9 +41,7 @@ Add the library as a dependency in your project's `Tachyon.toml`:
 ```toml
 [package]
 name = "myapp"
-
-[build]
-deps = ["../path/to/tachyon/lib/tachyonui"]
+deps = ["git+https://github.com/vahan-gev/tachyon-tachyonui#v0.2.0"]
 ```
 
 `tachyon run` / `tachyon build` then compiles the library's `.ty` sources with
@@ -69,6 +67,8 @@ HTML-adjacent, deliberately renamed:
 | `uiLabel(text)` | `label` | text node | sizes to its text |
 | `uiButton(text)` | `button` | `button` | centered text, UA default styling, `:hover` |
 | `uiImage(path)` | `img` | `img` | PNG (all platforms), plus JPEG etc. on macOS/Windows; natural size by default |
+| `uiInput(placeholder)` | `input` | `<input>` | single-line editable text: focus on click, caret, backspace, arrows, placeholder |
+| `uiCheckbox()` | `checkbox` | `<input type=checkbox>` | click to toggle; `uiIsChecked` / `uiSetChecked` |
 
 ## API
 
@@ -81,8 +81,16 @@ HTML-adjacent, deliberately renamed:
 
 **Styling** — `uiCss(cssText)`, `uiCssFile(path)` (may be called repeatedly; later rules win ties)
 
+**Input / checkbox** — `uiValue(id)`, `uiSetValue(id, s)`, `uiIsChecked(id)`,
+`uiSetChecked(id, bool)`, `uiFocus(id)`, `uiBlur()`, `uiFocused()`
+
 **Events** — `uiOnClick(id, (long) => void)` (fires on the nearest handler up the
-tree, click-release on the pressed element), `uiOnKey((int) => void)`
+tree, click-release on the pressed element), `uiOnChange(id, (long) => void)`
+(input text edited or checkbox toggled), `uiOnKey((int) => void)`
+
+`uiOnKey` receives **normalized** key codes across platforms: Backspace `8`,
+Tab `9`, Enter `13`, Escape `27`, arrows `37`–`40`. Printable typing is routed to
+the focused input automatically (you rarely need `uiOnKey` for text fields).
 
 Widget ids are plain `long` values. Handlers are ordinary Tachyon closures —
 captured state, `static mut` globals, `uiSetText`/`uiAddClass` calls all work.
@@ -104,9 +112,26 @@ selector per rule (no descendant combinators yet).
 | Border | `border-width`, `border-color`, `border-radius`, `border` shorthand |
 | Text | `font-size`, `font-weight` (`bold`/`normal`/numeric) |
 | Flex | `flex-direction` (`column` default / `row`), `gap`, `justify-content` (`flex-start`/`center`/`flex-end`/`space-between`), `align-items` (`flex-start`/`center`/`flex-end`/`stretch`) |
+| Transform | `transform: translate(x,y)` / `translateX` / `translateY` / `scale(s)` / `rotate(deg)` (composable), applied about the element's center at paint time |
+| Effects | `opacity` (0–1, applies to the element and its subtree) |
+| Animation | `transition` / `transition-duration` (`200ms`, `0.3s`) — eases color, opacity, and transform toward the target style |
 | Misc | `cursor` (`pointer`/`text`/`default`) |
 
 Unknown properties are ignored, browser-style. `/* comments */` are supported.
+
+**Animations** — put a `transition` on an element and any change to its visual
+style (typically via `:hover` or by toggling a class) eases smoothly instead of
+snapping. Transforms and opacity make this expressive:
+
+```css
+.chip            { background-color: #2563eb; transition: 200ms; }
+.chip:hover      { background-color: #1d4ed8; transform: scale(1.1) rotate(-2deg); }
+.fade            { opacity: 0.35; transition: 250ms; }
+.fade:hover      { opacity: 1.0; }
+```
+
+The engine drives its own frame clock while anything is mid-transition (and
+stops when everything has settled), so idle windows cost nothing.
 
 **Layout model** — every `box` is a flex container. Auto-sized leaf elements
 (labels, buttons, images) size to their content; auto-sized boxes stretch on

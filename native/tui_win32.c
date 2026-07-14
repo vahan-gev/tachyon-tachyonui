@@ -58,6 +58,13 @@ GpStatus WINAPI GdipLoadImageFromFile(const WCHAR* path, GpImage** img);
 GpStatus WINAPI GdipGetImageWidth(GpImage* img, UINT* w);
 GpStatus WINAPI GdipGetImageHeight(GpImage* img, UINT* h);
 GpStatus WINAPI GdipDrawImageRect(GpGraphics* g, GpImage* img, float x, float y, float w, float h);
+/* world-transform stack (for §animation transforms) */
+typedef UINT GraphicsState;
+GpStatus WINAPI GdipSaveGraphics(GpGraphics* g, GraphicsState* state);
+GpStatus WINAPI GdipRestoreGraphics(GpGraphics* g, GraphicsState state);
+GpStatus WINAPI GdipTranslateWorldTransform(GpGraphics* g, float dx, float dy, int order);
+GpStatus WINAPI GdipScaleWorldTransform(GpGraphics* g, float sx, float sy, int order);
+GpStatus WINAPI GdipRotateWorldTransform(GpGraphics* g, float angle, int order);
 
 extern void tuiRender(int32_t w, int32_t h);
 extern void tuiMouseMove(double x, double y);
@@ -65,12 +72,18 @@ extern void tuiMouseDown(double x, double y);
 extern void tuiMouseUp(double x, double y);
 extern void tuiResize(int32_t w, int32_t h);
 extern void tuiKeyDown(int32_t keycode);
+extern void tuiTextInput(int32_t codepoint);
+
+#define TUI_FRAME_TIMER 0x7ACF
+#define TUI_AUTOQUIT_TIMER 0x7ACE
 
 static HWND g_hwnd = 0;
 static int g_w = 0, g_h = 0;
 static GpGraphics* g_gfx = 0;   /* valid during WM_PAINT */
 static ULONG_PTR g_gdipToken = 0;
 static int g_cursorKind = 0;
+static GraphicsState g_gstack[64];   /* transform save/restore stack */
+static int g_gtop = 0;
 
 typedef struct { char* path; GpImage* img; } TuiImg;
 static TuiImg g_images[256];
@@ -129,9 +142,32 @@ static LRESULT CALLBACK tui_wndproc(HWND h, UINT msg, WPARAM wp, LPARAM lp) {
             ReleaseCapture();
             tuiMouseUp((double)(short)LOWORD(lp), (double)(short)HIWORD(lp));
             return 0;
-        case WM_KEYDOWN:
-            tuiKeyDown((int32_t)wp);
+        case WM_KEYDOWN: {
+            int32_t k = 0;
+            switch (wp) {
+                case VK_BACK:   k = 8;  break;
+                case VK_TAB:    k = 9;  break;
+                case VK_RETURN: k = 13; break;
+                case VK_ESCAPE: k = 27; break;
+                case VK_LEFT:   k = 37; break;
+                case VK_UP:     k = 38; break;
+                case VK_RIGHT:  k = 39; break;
+                case VK_DOWN:   k = 40; break;
+                default: break;         /* printable keys arrive as WM_CHAR */
+            }
+            if (k) tuiKeyDown(k);
             return 0;
+        }
+        case WM_CHAR:
+            if (wp >= 0x20 && wp != 0x7F) tuiTextInput((int32_t)wp);
+            return 0;
+        case WM_TIMER:
+            if (wp == TUI_FRAME_TIMER) {
+                KillTimer(h, TUI_FRAME_TIMER);
+                InvalidateRect(h, 0, FALSE);
+                return 0;
+            }
+            break;
         case WM_SETCURSOR:
             if (LOWORD(lp) == HTCLIENT) {
                 LPCSTR c = g_cursorKind == 1 ? IDC_HAND : g_cursorKind == 2 ? IDC_IBEAM : IDC_ARROW;
@@ -171,10 +207,10 @@ void tui_create_window(const char* title, int32_t w, int32_t h) {
 void tui_run(void) {
     ShowWindow(g_hwnd, SW_SHOW);
     const char* aq = getenv("TUI_AUTOQUIT_MS");
-    if (aq) SetTimer(g_hwnd, 0x7ACE, (UINT)atoi(aq), 0);
+    if (aq) SetTimer(g_hwnd, TUI_AUTOQUIT_TIMER, (UINT)atoi(aq), 0);
     MSG msg;
     while (GetMessageA(&msg, 0, 0, 0)) {
-        if (msg.message == WM_TIMER && aq) break;
+        if (msg.message == WM_TIMER && msg.wParam == TUI_AUTOQUIT_TIMER && aq) break;
         TranslateMessage(&msg);
         DispatchMessageA(&msg);
     }
@@ -184,6 +220,24 @@ void tui_quit(void) { PostQuitMessage(0); }
 int32_t tui_width(void)  { return g_w; }
 int32_t tui_height(void) { return g_h; }
 void tui_redraw(void) { InvalidateRect(g_hwnd, 0, FALSE); }
+void tui_request_frame(void) { SetTimer(g_hwnd, TUI_FRAME_TIMER, 16, 0); }
+
+/* transforms — GDI+ world transform, with a manual save/restore token stack */
+void tui_save(void) {
+    if (g_gfx && g_gtop < 64) GdipSaveGraphics(g_gfx, &g_gstack[g_gtop++]);
+}
+void tui_restore(void) {
+    if (g_gfx && g_gtop > 0) GdipRestoreGraphics(g_gfx, g_gstack[--g_gtop]);
+}
+void tui_translate(double dx, double dy) {
+    if (g_gfx) GdipTranslateWorldTransform(g_gfx, (float)dx, (float)dy, 0 /*prepend*/);
+}
+void tui_scale(double sx, double sy) {
+    if (g_gfx) GdipScaleWorldTransform(g_gfx, (float)sx, (float)sy, 0);
+}
+void tui_rotate(double deg) {
+    if (g_gfx) GdipRotateWorldTransform(g_gfx, (float)deg, 0);
+}
 
 /* ---------- drawing ---------- */
 static void tui_round_path(GpPath* p, float x, float y, float w, float h, float r) {

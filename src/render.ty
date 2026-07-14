@@ -1,30 +1,82 @@
 // TachyonUI — renderer: walks the widget tree and paints via the native shim.
+// Paints from uiShown (the eased/animated style); geometry comes from layout.
+// A widget with a transform or opacity < 1 wraps its subtree in a native
+// save/restore so the effect applies to it and its children.
 
-function uiPaint(id: long): void {
-    let st = uiStyle[id];
+function uiHasTransform(st: TuiStyle): bool {
+    return st.tx != 0.0 || st.ty != 0.0 || st.scale != 1.0 || st.rotate != 0.0;
+}
+
+function uiPaint(id: long, inheritedOpacity: double): void {
+    let st = uiShown[id];
     let x = uiX[id];
     let y = uiY[id];
     let w = uiW[id];
     let h = uiH[id];
 
-    tui_rect(x, y, w, h, st.radius, st.bgR, st.bgG, st.bgB, st.bgA);
-    tui_border(x, y, w, h, st.radius, st.borderWidth, st.boR, st.boG, st.boB, st.boA);
+    let op = inheritedOpacity * st.opacity;
+    if (op <= 0.0) { return; }                    // fully transparent subtree
+
+    let transformed = uiHasTransform(st);
+    if (transformed) {
+        let cx = x + w / 2.0;
+        let cy = y + h / 2.0;
+        tui_save();
+        tui_translate(st.tx, st.ty);              // translate() first
+        tui_translate(cx, cy);                    // then rotate/scale about center
+        tui_rotate(st.rotate);
+        tui_scale(st.scale, st.scale);
+        tui_translate(-cx, -cy);
+    }
+
+    // background + border (alpha scaled by the effective opacity)
+    tui_rect(x, y, w, h, st.radius, st.bgR, st.bgG, st.bgB, st.bgA * op);
+    tui_border(x, y, w, h, st.radius, st.borderWidth, st.boR, st.boG, st.boB, st.boA * op);
 
     let k = uiKind[id];
-    if (k == 1) {                            // label: text at the content origin
+    if (k == 1) {                                 // label
         tui_text(uiText[id], x + st.padL, y + st.padT,
-                 st.fontSize, uiBoldInt(st), st.fgR, st.fgG, st.fgB, st.fgA);
-    } else if (k == 2) {                     // button: text centered
+                 st.fontSize, uiBoldInt(st), st.fgR, st.fgG, st.fgB, st.fgA * op);
+    } else if (k == 2) {                          // button: text centered
         let tw = tui_text_width(uiText[id], st.fontSize, uiBoldInt(st));
         let th = tui_text_height(st.fontSize);
         tui_text(uiText[id], x + (w - tw) / 2.0, y + (h - th) / 2.0,
-                 st.fontSize, uiBoldInt(st), st.fgR, st.fgG, st.fgB, st.fgA);
-    } else if (k == 3) {                     // image: fills the content box
+                 st.fontSize, uiBoldInt(st), st.fgR, st.fgG, st.fgB, st.fgA * op);
+    } else if (k == 3) {                          // image: fills the content box
         tui_image(uiText[id], x + st.padL, y + st.padT,
                   w - st.padL - st.padR, h - st.padT - st.padB);
+    } else if (k == 4) {                          // input: value or placeholder + caret
+        uiPaintInput(id, st, x, y, w, h, op);
+    } else if (k == 5) {                          // checkbox: inner mark when set
+        if (uiChecked[id]) {
+            let inset = 4.0;
+            tui_rect(x + inset, y + inset, w - inset * 2.0, h - inset * 2.0,
+                     2.0, st.fgR, st.fgG, st.fgB, op);
+        }
     }
 
     for (c in uiChildren[id]) {
-        uiPaint(c);
+        uiPaint(c, op);
+    }
+
+    if (transformed) { tui_restore(); }
+}
+
+function uiPaintInput(id: long, st: TuiStyle, x: double, y: double,
+                      w: double, h: double, op: double): void {
+    let tx = x + st.padL;
+    let th = tui_text_height(st.fontSize);
+    let ty = y + (h - th) / 2.0;                  // vertically centered text
+    let val = uiText[id];
+    if (val.len() == 0L) {                        // placeholder in muted gray
+        tui_text(uiPlaceholder[id], tx, ty, st.fontSize, 0, 0.6, 0.62, 0.66, op);
+    } else {
+        tui_text(val, tx, ty, st.fontSize, uiBoldInt(st),
+                 st.fgR, st.fgG, st.fgB, st.fgA * op);
+    }
+    if (uiFocusId == id) {                        // caret after the first `caret` chars
+        let head = uiStrHead(val, uiCaret[id]);
+        let cx = tx + tui_text_width(head, st.fontSize, uiBoldInt(st));
+        tui_rect(cx, ty, 1.5, th, 0.0, st.fgR, st.fgG, st.fgB, op);
     }
 }

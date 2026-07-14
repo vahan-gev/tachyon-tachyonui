@@ -10,14 +10,17 @@
 #ifdef __linux__
 #include <X11/Xlib.h>
 #include <X11/Xutil.h>
+#include <X11/keysym.h>
 #include <X11/cursorfont.h>
 #include <cairo/cairo.h>
 #include <cairo/cairo-xlib.h>
 #include <stdint.h>
+#include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 #include <math.h>
 #include <sys/time.h>
+#include <unistd.h>
 
 extern void tuiRender(int32_t w, int32_t h);
 extern void tuiMouseMove(double x, double y);
@@ -25,6 +28,7 @@ extern void tuiMouseDown(double x, double y);
 extern void tuiMouseUp(double x, double y);
 extern void tuiResize(int32_t w, int32_t h);
 extern void tuiKeyDown(int32_t keycode);
+extern void tuiTextInput(int32_t codepoint);
 
 static Display* g_dpy = 0;
 static Window g_win = 0;
@@ -64,6 +68,14 @@ void tui_quit(void) { g_running = 0; }
 int32_t tui_width(void)  { return g_w; }
 int32_t tui_height(void) { return g_h; }
 void tui_redraw(void) { g_dirty = 1; }
+void tui_request_frame(void) { g_dirty = 1; }   /* the loop repaints next tick */
+
+/* transforms — cairo carries a matrix stack of its own */
+void tui_save(void)    { if (g_cr) cairo_save(g_cr); }
+void tui_restore(void) { if (g_cr) cairo_restore(g_cr); }
+void tui_translate(double dx, double dy) { if (g_cr) cairo_translate(g_cr, dx, dy); }
+void tui_scale(double sx, double sy)     { if (g_cr) cairo_scale(g_cr, sx, sy); }
+void tui_rotate(double deg)              { if (g_cr) cairo_rotate(g_cr, deg * M_PI / 180.0); }
 
 void tui_run(void) {
     XMapWindow(g_dpy, g_win);
@@ -94,7 +106,27 @@ void tui_run(void) {
                 case ButtonRelease:
                     if (e.xbutton.button == Button1) tuiMouseUp(e.xbutton.x, e.xbutton.y);
                     break;
-                case KeyPress: tuiKeyDown((int32_t)e.xkey.keycode); break;
+                case KeyPress: {
+                    char kb[16]; KeySym ks = 0;
+                    int kn = XLookupString(&e.xkey, kb, sizeof kb, &ks, 0);
+                    switch (ks) {
+                        case XK_BackSpace: tuiKeyDown(8); break;
+                        case XK_Tab:       tuiKeyDown(9); break;
+                        case XK_Return:
+                        case XK_KP_Enter:  tuiKeyDown(13); break;
+                        case XK_Escape:    tuiKeyDown(27); break;
+                        case XK_Left:      tuiKeyDown(37); break;
+                        case XK_Up:        tuiKeyDown(38); break;
+                        case XK_Right:     tuiKeyDown(39); break;
+                        case XK_Down:      tuiKeyDown(40); break;
+                        default:
+                            for (int ki = 0; ki < kn; ki++)
+                                if ((unsigned char)kb[ki] >= 0x20)
+                                    tuiTextInput((int32_t)(unsigned char)kb[ki]);
+                            break;
+                    }
+                    break;
+                }
                 case ClientMessage:
                     if ((Atom)e.xclient.data.l[0] == g_wmDelete) g_running = 0;
                     break;

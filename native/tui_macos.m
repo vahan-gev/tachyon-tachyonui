@@ -24,10 +24,17 @@ extern void tuiMouseDown(double x, double y);
 extern void tuiMouseUp(double x, double y);
 extern void tuiResize(int32_t w, int32_t h);
 extern void tuiKeyDown(int32_t keycode);
+extern void tuiTextInput(int32_t codepoint);   // a typed printable character
 
 static NSWindow* g_window = nil;
 static NSView* g_view = nil;
 static NSMutableDictionary<NSString*, NSImage*>* g_images = nil;
+static BOOL g_frame_pending = NO;
+
+/* normalized key codes shared across platforms (JS-like) */
+enum { TUI_KEY_BACKSPACE = 8, TUI_KEY_TAB = 9, TUI_KEY_ENTER = 13,
+       TUI_KEY_ESC = 27, TUI_KEY_LEFT = 37, TUI_KEY_UP = 38,
+       TUI_KEY_RIGHT = 39, TUI_KEY_DOWN = 40 };
 
 /* ---------- view ---------- */
 
@@ -66,7 +73,28 @@ static NSMutableDictionary<NSString*, NSImage*>* g_images = nil;
     NSPoint p = [self convertPoint:e.locationInWindow fromView:nil];
     tuiMouseUp(p.x, p.y);
 }
-- (void)keyDown:(NSEvent*)e { tuiKeyDown((int32_t)e.keyCode); }
+- (void)keyDown:(NSEvent*)e {
+    NSString* chars = e.characters;
+    if (chars.length == 0) { tuiKeyDown((int32_t)e.keyCode); return; }
+    for (NSUInteger i = 0; i < chars.length; i++) {
+        unichar ch = [chars characterAtIndex:i];
+        switch (ch) {
+            case 0x7F: case 0x08: tuiKeyDown(TUI_KEY_BACKSPACE); break;
+            case 0x0D: case 0x03: tuiKeyDown(TUI_KEY_ENTER); break;
+            case 0x1B:            tuiKeyDown(TUI_KEY_ESC); break;
+            case 0x09:            tuiKeyDown(TUI_KEY_TAB); break;
+            case NSLeftArrowFunctionKey:  tuiKeyDown(TUI_KEY_LEFT); break;
+            case NSUpArrowFunctionKey:    tuiKeyDown(TUI_KEY_UP); break;
+            case NSRightArrowFunctionKey: tuiKeyDown(TUI_KEY_RIGHT); break;
+            case NSDownArrowFunctionKey:  tuiKeyDown(TUI_KEY_DOWN); break;
+            default:
+                /* printable, non-function characters become text input */
+                if (ch >= 0x20 && !(ch >= 0xF700 && ch <= 0xF8FF))
+                    tuiTextInput((int32_t)ch);
+                break;
+        }
+    }
+}
 - (void)setFrameSize:(NSSize)sz {
     [super setFrameSize:sz];
     tuiResize((int32_t)sz.width, (int32_t)sz.height);
@@ -129,6 +157,35 @@ int32_t tui_width(void)  { return g_view ? (int32_t)g_view.bounds.size.width : 0
 int32_t tui_height(void) { return g_view ? (int32_t)g_view.bounds.size.height : 0; }
 
 void tui_redraw(void) { [g_view setNeedsDisplay:YES]; }
+
+/* schedule exactly one more frame ~1/60s out; coalesced so a whole animating
+   tree costs one timer, not one per widget. */
+void tui_request_frame(void) {
+    if (g_frame_pending || !g_view) return;
+    g_frame_pending = YES;
+    dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(NSEC_PER_SEC / 60)),
+                   dispatch_get_main_queue(), ^{
+        g_frame_pending = NO;
+        [g_view setNeedsDisplay:YES];
+    });
+}
+
+/* ---------- transforms (valid inside tuiRender) ---------- */
+
+void tui_save(void)    { [NSGraphicsContext saveGraphicsState]; }
+void tui_restore(void) { [NSGraphicsContext restoreGraphicsState]; }
+void tui_translate(double dx, double dy) {
+    NSAffineTransform* t = [NSAffineTransform transform];
+    [t translateXBy:dx yBy:dy]; [t concat];
+}
+void tui_scale(double sx, double sy) {
+    NSAffineTransform* t = [NSAffineTransform transform];
+    [t scaleXBy:sx yBy:sy]; [t concat];
+}
+void tui_rotate(double deg) {
+    NSAffineTransform* t = [NSAffineTransform transform];
+    [t rotateByDegrees:deg]; [t concat];
+}
 
 /* ---------- drawing (valid inside tuiRender) ---------- */
 

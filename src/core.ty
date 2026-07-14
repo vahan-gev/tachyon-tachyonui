@@ -8,27 +8,39 @@
 // Every element is styled with CSS via uiCss / uiCssFile.
 
 // ---- widget stores (id = index) ----
-static mut uiKind: Vec<int> = Vec();            // 0 box, 1 label, 2 button, 3 image
-static mut uiText: Vec<string> = Vec();         // text, or image path
+// kinds: 0 box, 1 label, 2 button, 3 image, 4 input, 5 checkbox
+static mut uiKind: Vec<int> = Vec();
+static mut uiText: Vec<string> = Vec();         // text, image path, or input value
 static mut uiIdName: Vec<string> = Vec();       // css #id
 static mut uiClasses: Vec<Vec<string>> = Vec();
 static mut uiChildren: Vec<Vec<long>> = Vec();
 static mut uiParent: Vec<long> = Vec();
-static mut uiStyle: Vec<TuiStyle> = Vec();      // computed each frame
+static mut uiStyle: Vec<TuiStyle> = Vec();      // computed (target) style, each frame
+static mut uiShown: Vec<TuiStyle> = Vec();      // displayed style — eased toward target
+static mut uiShownSet: Vec<bool> = Vec();       // has uiShown been seeded yet?
 static mut uiX: Vec<double> = Vec();            // layout results
 static mut uiY: Vec<double> = Vec();
 static mut uiW: Vec<double> = Vec();
 static mut uiH: Vec<double> = Vec();
+static mut uiPlaceholder: Vec<string> = Vec();  // input placeholder text
+static mut uiChecked: Vec<bool> = Vec();        // checkbox state
+static mut uiCaret: Vec<long> = Vec();          // input caret (character index)
 
 static mut uiRootId: long = -1L;
 static mut uiMouseX: double = -1.0;
 static mut uiMouseY: double = -1.0;
 static mut uiHoverId: long = -1L;
 static mut uiPressedId: long = -1L;
+static mut uiFocusId: long = -1L;               // focused input, or -1
 
 static mut uiClickIds: Vec<long> = Vec();       // parallel: widget id -> handler
 static mut uiClickFns: Vec<(long) => void> = Vec();
+static mut uiChangeIds: Vec<long> = Vec();      // input/checkbox change handlers
+static mut uiChangeFns: Vec<(long) => void> = Vec();
 static mut uiKeyFns: Vec<(int) => void> = Vec();
+
+static mut uiLastFrameMs: double = -1.0;        // §animation clock (nowMillis)
+static mut uiAnimating: bool = false;           // any widget mid-transition this frame
 
 // ---- construction ----
 function uiInit(title: string, w: int, h: int): void {
@@ -47,10 +59,15 @@ function uiNew(kind: int, text: string): long {
     uiChildren.push(ch);
     uiParent.push(-1L);
     uiStyle.push(TuiStyle());
+    uiShown.push(TuiStyle());
+    uiShownSet.push(false);
     uiX.push(0.0);
     uiY.push(0.0);
     uiW.push(0.0);
     uiH.push(0.0);
+    uiPlaceholder.push("");
+    uiChecked.push(false);
+    uiCaret.push(0L);
     return id;
 }
 
@@ -58,6 +75,15 @@ function uiBox(): long            { return uiNew(0, ""); }
 function uiLabel(text: string): long  { return uiNew(1, text); }
 function uiButton(text: string): long { return uiNew(2, text); }
 function uiImage(path: string): long  { return uiNew(3, path); }
+
+/// A single-line editable text field. `placeholder` shows in gray when empty.
+function uiInput(placeholder: string): long {
+    let id = uiNew(4, "");
+    uiPlaceholder[id] = placeholder;
+    return id;
+}
+/// A toggle box. Starts unchecked; clicking it flips the state and fires onChange.
+function uiCheckbox(): long { return uiNew(5, ""); }
 
 function uiAppend(parent: long, child: long): void {
     uiChildren[parent].push(child);
@@ -103,6 +129,71 @@ function uiHasClass(id: long, cls: string): bool {
     return false;
 }
 
+// ---- input / checkbox values ----
+function uiValue(id: long): string { return uiText[id]; }
+function uiSetValue(id: long, s: string): void {
+    uiText[id] = s;
+    uiCaret[id] = s.charLen();
+    tui_redraw();
+}
+function uiIsChecked(id: long): bool { return uiChecked[id]; }
+function uiSetChecked(id: long, b: bool): void {
+    uiChecked[id] = b;
+    tui_redraw();
+}
+
+// ---- focus ----
+function uiFocus(id: long): void {
+    uiFocusId = id;
+    uiCaret[id] = uiText[id].charLen();
+    tui_redraw();
+}
+function uiBlur(): void {
+    uiFocusId = -1L;
+    tui_redraw();
+}
+function uiFocused(): long { return uiFocusId; }
+
+// insert `ins` at character index `at`; return the new string
+function uiStrInsert(s: string, at: long, ins: string): string {
+    let cs = s.chars();
+    let out = "";
+    for (i in 0L..cs.len()) {
+        if (i == at) { out = out + ins; }
+        out = out + cs[i];
+    }
+    if (at >= cs.len()) { out = out + ins; }
+    return out;
+}
+// delete the character before index `at`; return the new string
+function uiStrDeleteBefore(s: string, at: long): string {
+    if (at <= 0L) { return s; }
+    let cs = s.chars();
+    let out = "";
+    for (i in 0L..cs.len()) {
+        if (i != at - 1L) { out = out + cs[i]; }
+    }
+    return out;
+}
+// join the first `n` characters (for measuring the caret x offset)
+function uiStrHead(s: string, n: long): string {
+    let cs = s.chars();
+    let out = "";
+    for (i in 0L..cs.len()) {
+        if (i < n) { out = out + cs[i]; }
+    }
+    return out;
+}
+
+function uiFireChange(id: long): void {
+    for (i in 0L..uiChangeIds.len()) {
+        if (uiChangeIds[i] == id) {
+            let f = uiChangeFns[i];
+            f(id);
+        }
+    }
+}
+
 // ---- styling ----
 function uiCss(css: string): void {
     cssParse(css);
@@ -115,6 +206,13 @@ function uiOnClick(id: long, f: (long) => void): void {
     uiClickIds.push(id);
     uiClickFns.push(f);
 }
+/// Fires when an input's text changes or a checkbox is toggled.
+function uiOnChange(id: long, f: (long) => void): void {
+    uiChangeIds.push(id);
+    uiChangeFns.push(f);
+}
+/// Global key handler. Receives normalized key codes: Backspace 8, Tab 9,
+/// Enter 13, Escape 27, arrows 37-40. Printable typing goes to the focused input.
 function uiOnKey(f: (int) => void): void { uiKeyFns.push(f); }
 
 // ---- run loop ----
@@ -178,6 +276,84 @@ function uiComputeStyles(): void {
     }
 }
 
+// ---- §animation: ease the displayed style toward the computed target -------
+function uiLerp(a: double, b: double, t: double): double { return a + (b - a) * t; }
+
+// build the displayed style: layout-affecting fields snap to the target; the
+// visual fields (color, opacity, transform, border) ease from `shown` by `f`.
+function uiEaseToward(shown: TuiStyle, target: TuiStyle, f: double): TuiStyle {
+    let s = target;                          // snaps every non-visual field
+    s.bgR = uiLerp(shown.bgR, target.bgR, f);
+    s.bgG = uiLerp(shown.bgG, target.bgG, f);
+    s.bgB = uiLerp(shown.bgB, target.bgB, f);
+    s.bgA = uiLerp(shown.bgA, target.bgA, f);
+    s.fgR = uiLerp(shown.fgR, target.fgR, f);
+    s.fgG = uiLerp(shown.fgG, target.fgG, f);
+    s.fgB = uiLerp(shown.fgB, target.fgB, f);
+    s.fgA = uiLerp(shown.fgA, target.fgA, f);
+    s.boR = uiLerp(shown.boR, target.boR, f);
+    s.boG = uiLerp(shown.boG, target.boG, f);
+    s.boB = uiLerp(shown.boB, target.boB, f);
+    s.boA = uiLerp(shown.boA, target.boA, f);
+    s.borderWidth = uiLerp(shown.borderWidth, target.borderWidth, f);
+    s.radius = uiLerp(shown.radius, target.radius, f);
+    s.opacity = uiLerp(shown.opacity, target.opacity, f);
+    s.tx = uiLerp(shown.tx, target.tx, f);
+    s.ty = uiLerp(shown.ty, target.ty, f);
+    s.scale = uiLerp(shown.scale, target.scale, f);
+    s.rotate = uiLerp(shown.rotate, target.rotate, f);
+    return s;
+}
+
+// have the visual fields settled onto the target (within a small tolerance)?
+function uiSettled(a: TuiStyle, b: TuiStyle): bool {
+    let e = 0.004;                            // colors/opacity/scale (0..1 range)
+    let g = 0.3;                              // pixels / degrees
+    return abs(a.bgR - b.bgR) < e && abs(a.bgG - b.bgG) < e &&
+           abs(a.bgB - b.bgB) < e && abs(a.bgA - b.bgA) < e &&
+           abs(a.fgR - b.fgR) < e && abs(a.fgG - b.fgG) < e &&
+           abs(a.fgB - b.fgB) < e && abs(a.fgA - b.fgA) < e &&
+           abs(a.boA - b.boA) < e && abs(a.opacity - b.opacity) < e &&
+           abs(a.scale - b.scale) < e && abs(a.borderWidth - b.borderWidth) < g &&
+           abs(a.radius - b.radius) < g && abs(a.tx - b.tx) < g &&
+           abs(a.ty - b.ty) < g && abs(a.rotate - b.rotate) < g;
+}
+
+// advance every widget's displayed style one frame; sets uiAnimating if any is
+// still in motion (so the caller schedules another frame).
+function uiAdvanceAnim(): void {
+    let now = nowMillis() as double;
+    let dt = 16.0;
+    if (uiLastFrameMs >= 0.0) { dt = now - uiLastFrameMs; }
+    uiLastFrameMs = now;
+    if (dt < 0.0) { dt = 0.0; }
+    if (dt > 200.0) { dt = 200.0; }           // clamp after a stall/first frame
+    uiAnimating = false;
+    for (w in 0L..uiKind.len()) {
+        let target = uiStyle[w];
+        if (!uiShownSet[w]) {                 // first sight: no animation in
+            uiShown[w] = target;
+            uiShownSet[w] = true;
+            continue;
+        }
+        if (target.transition <= 0.0) {       // transitions off: snap
+            uiShown[w] = target;
+            continue;
+        }
+        // exponential ease; ~transition ms to visually settle
+        let f = 1.0 - exp(-5.0 * dt / target.transition);
+        if (f < 0.0) { f = 0.0; }
+        if (f > 1.0) { f = 1.0; }
+        let eased = uiEaseToward(uiShown[w], target, f);
+        if (uiSettled(eased, target)) {
+            uiShown[w] = target;              // land exactly, stop animating
+        } else {
+            uiShown[w] = eased;
+            uiAnimating = true;
+        }
+    }
+}
+
 function uiEffectiveCursor(id: long): int {  // inherit cursor up the tree
     let cur = id;
     while (cur >= 0L) {
@@ -192,9 +368,11 @@ function uiEffectiveCursor(id: long): int {  // inherit cursor up the tree
 function tuiRender(w: int, h: int): void {
     tui_clear(1.0, 1.0, 1.0);
     if (uiRootId < 0L) { return; }
-    uiComputeStyles();
-    uiLayoutRoot(w as double, h as double);
-    uiPaint(uiRootId);
+    uiComputeStyles();                        // target styles
+    uiAdvanceAnim();                          // ease displayed styles toward them
+    uiLayoutRoot(w as double, h as double);   // layout from target geometry
+    uiPaint(uiRootId, 1.0);                   // paint from the eased styles
+    if (uiAnimating) { tui_request_frame(); } // keep going while anything moves
 }
 
 @export
@@ -223,6 +401,21 @@ function tuiMouseUp(x: double, y: double): void {
     uiMouseY = y;
     let t = uiHitTest();
     if (t >= 0L && uiPressedId >= 0L) {
+        // focus: clicking an input focuses it; clicking anything else blurs
+        let newFocus = -1L;
+        if (uiKind[t] == 4) { newFocus = t; }
+        if (newFocus != uiFocusId) {
+            uiFocusId = newFocus;
+            if (newFocus >= 0L) { uiCaret[newFocus] = uiText[newFocus].charLen(); }
+            tui_redraw();
+        }
+        // checkbox: clicking toggles and fires onChange
+        if (uiKind[t] == 5) {
+            uiChecked[t] = !uiChecked[t];
+            uiFireChange(t);
+            tui_redraw();
+        }
+        // onClick: nearest self-or-ancestor handler
         let hi = uiFindHandler(t);
         if (hi >= 0L) {
             let target = uiClickIds[hi];
@@ -242,7 +435,39 @@ function tuiResize(w: int, h: int): void {
 
 @export
 function tuiKeyDown(key: int): void {
+    // editing keys go to the focused input first
+    if (uiFocusId >= 0L && uiKind[uiFocusId] == 4) {
+        let id = uiFocusId;
+        if (key == 8) {                              // backspace
+            if (uiCaret[id] > 0L) {
+                uiText[id] = uiStrDeleteBefore(uiText[id], uiCaret[id]);
+                uiCaret[id] = uiCaret[id] - 1L;
+                uiFireChange(id);
+                tui_redraw();
+            }
+        } else if (key == 37) {                      // left
+            if (uiCaret[id] > 0L) { uiCaret[id] = uiCaret[id] - 1L; tui_redraw(); }
+        } else if (key == 39) {                      // right
+            if (uiCaret[id] < uiText[id].charLen()) {
+                uiCaret[id] = uiCaret[id] + 1L;
+                tui_redraw();
+            }
+        } else if (key == 13 || key == 27) {         // enter / escape: blur
+            uiBlur();
+        }
+    }
     for (f in uiKeyFns) {
         f(key);
     }
+}
+
+@export
+function tuiTextInput(cp: int): void {
+    if (uiFocusId < 0L || uiKind[uiFocusId] != 4) { return; }
+    let id = uiFocusId;
+    let ins = fromCodePoint(cp);
+    uiText[id] = uiStrInsert(uiText[id], uiCaret[id], ins);
+    uiCaret[id] = uiCaret[id] + 1L;
+    uiFireChange(id);
+    tui_redraw();
 }

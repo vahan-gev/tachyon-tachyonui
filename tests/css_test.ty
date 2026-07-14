@@ -204,3 +204,136 @@ function imageElement(): void {
     }
     assertEq(tui_image_width("/tmp/no_such_image.png"), 0.0);
 }
+
+// ---- v0.2: transforms, opacity, transitions --------------------------------
+
+@test
+function transformParsing(): void {
+    let b = uiBox();
+    uiAddClass(b, "t11tf");
+    cssParse(".t11tf { transform: translate(10px, -5px) scale(1.5) rotate(45deg); "
+             + "opacity: 0.4; transition: 200ms; }");
+    let st = cssCompute(b, false);
+    assertEq(st.tx, 10.0);
+    assertEq(st.ty, -5.0);
+    assertEq(st.scale, 1.5);
+    assertEq(st.rotate, 45.0);
+    assert(st.opacity > 0.39 && st.opacity < 0.41);
+    assertEq(st.transition, 200.0);
+
+    // individual axis functions and 0.3s duration
+    let c = uiBox();
+    uiAddClass(c, "t11tf2");
+    cssParse(".t11tf2 { transform: translateX(20px) translateY(30px); "
+             + "transition: transform 0.3s ease; }");
+    let s2 = cssCompute(c, false);
+    assertEq(s2.tx, 20.0);
+    assertEq(s2.ty, 30.0);
+    assertEq(s2.transition, 300.0);        // 0.3s -> 300ms
+}
+
+@test
+function easingSettlesOnTarget(): void {
+    // uiEaseToward with f=1 lands exactly on the target; f=0 keeps the source
+    let from = TuiStyle();
+    let to = TuiStyle();
+    to.opacity = 0.0; to.tx = 100.0; to.scale = 2.0; to.bgA = 1.0;
+    let mid = uiEaseToward(from, to, 0.5);
+    assert(mid.tx > 49.0 && mid.tx < 51.0);   // halfway
+    assert(mid.scale > 1.49 && mid.scale < 1.51);
+    let done = uiEaseToward(from, to, 1.0);
+    assertEq(done.tx, 100.0);
+    assertEq(done.scale, 2.0);
+    assert(uiSettled(done, to));              // reached the target
+    assert(!uiSettled(from, to));             // start is not settled
+}
+
+// ---- v0.2: input and checkbox ----------------------------------------------
+
+@test
+function inputEditing(): void {
+    let inp = uiInput("type here");
+    uiFocus(inp);
+    assertEq(uiFocused(), inp);
+    assertEq(uiValue(inp), "");
+
+    // typing appends at the caret
+    tuiTextInput(104);   // 'h'
+    tuiTextInput(105);   // 'i'
+    assertEq(uiValue(inp), "hi");
+    assertEq(uiCaret[inp], 2L);
+
+    // left arrow, then insert in the middle
+    tuiKeyDown(37);      // left
+    assertEq(uiCaret[inp], 1L);
+    tuiTextInput(88);    // 'X' between h and i
+    assertEq(uiValue(inp), "hXi");
+
+    // backspace deletes the char before the caret
+    tuiKeyDown(8);
+    assertEq(uiValue(inp), "hi");
+
+    // enter blurs
+    tuiKeyDown(13);
+    assertEq(uiFocused(), -1L);
+
+    // typing with nothing focused is ignored
+    tuiTextInput(122);
+    assertEq(uiValue(inp), "hi");
+}
+
+@test
+function inputChangeHandler(): void {
+    let inp = uiInput("");
+    uiFocus(inp);
+    let seen = uiBox();                        // a place to record the last value
+    uiOnChange(inp, (id: long) => {
+        uiSetText(seen, uiValue(id));
+    });
+    tuiTextInput(97);   // 'a'
+    tuiTextInput(98);   // 'b'
+    assertEq(uiGetText(seen), "ab");
+    uiBlur();
+}
+
+@test
+function checkboxToggle(): void {
+    let root = uiBox();
+    uiSetId(root, "t14root");
+    let cb = uiCheckbox();
+    uiSetId(cb, "t14cb");
+    uiAppend(root, cb);
+    cssParse("#t14cb { width: 18px; height: 18px; }");
+    uiSetRoot(root);
+    uiComputeStyles();
+    uiLayoutRoot(200.0, 200.0);
+
+    assertEq(uiIsChecked(cb), false);
+    let toggles = uiBox();
+    uiOnChange(cb, (id: long) => {
+        uiSetText(toggles, "changed");
+    });
+    // click the checkbox: press and release on it
+    tuiMouseDown(uiX[cb] + 5.0, uiY[cb] + 5.0);
+    tuiMouseUp(uiX[cb] + 5.0, uiY[cb] + 5.0);
+    assertEq(uiIsChecked(cb), true);
+    assertEq(uiGetText(toggles), "changed");
+
+    // programmatic set
+    uiSetChecked(cb, false);
+    assertEq(uiIsChecked(cb), false);
+}
+
+@test
+function inputSizing(): void {
+    let inp = uiInput("hi");
+    uiSetId(inp, "t15inp");
+    let root = uiBox();
+    uiAppend(root, inp);
+    cssParse("#t15inp { width: 240px; height: 36px; }");
+    uiSetRoot(root);
+    uiComputeStyles();
+    uiLayoutRoot(400.0, 300.0);
+    assertEq(uiW[inp], 240.0);
+    assertEq(uiH[inp], 36.0);
+}

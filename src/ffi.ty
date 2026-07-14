@@ -8,6 +8,7 @@ extern function tui_quit(): void;
 extern function tui_width(): int;
 extern function tui_height(): int;
 extern function tui_redraw(): void;
+extern function tui_request_frame(): void;   // schedule one more frame (~60fps) for animation
 
 // drawing — only valid while the native shim is inside tuiRender
 extern function tui_clear(r: double, g: double, b: double): void;
@@ -23,3 +24,12 @@ extern function tui_image(path: string, x: double, y: double, w: double, h: doub
 extern function tui_image_width(path: string): double;
 extern function tui_image_height(path: string): double;
 extern function tui_set_cursor(kind: int): void;
+
+// transforms — a save/restore stack around the current transformation matrix,
+// valid inside tuiRender. This is what animation (translate / scale / rotate)
+// rides on; the renderer wraps a transformed subtree in save()/restore().
+extern function tui_save(): void;
+extern function tui_restore(): void;
+extern function tui_translate(dx: double, dy: double): void;
+extern function tui_scale(sx: double, sy: double): void;
+extern function tui_rotate(deg: double): void;

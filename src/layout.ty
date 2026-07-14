@@ -13,12 +13,15 @@ function uiMeasureW(id: long): double {
     let st = uiStyle[id];
     if (!st.widthPct && st.width >= 0.0) { return st.width; }
     let k = uiKind[id];
-    if (k == 1 || k == 2) {
-        return tui_text_width(uiText[id], st.fontSize, uiBoldInt(st)) + st.padL + st.padR;
+    if (k == 1 || k == 2 || k == 4) {
+        let s = uiText[id];
+        if (k == 4 && s.len() == 0L) { s = uiPlaceholder[id]; }
+        return tui_text_width(s, st.fontSize, uiBoldInt(st)) + st.padL + st.padR;
     }
     if (k == 3) {
         return tui_image_width(uiText[id]) + st.padL + st.padR;
     }
+    if (k == 5) { return 16.0 + st.padL + st.padR; }
     let total = 0.0;
     let maxc = 0.0;
     let n = uiChildren[id].len();
@@ -39,12 +42,13 @@ function uiMeasureH(id: long): double {
     let st = uiStyle[id];
     if (!st.heightPct && st.height >= 0.0) { return st.height; }
     let k = uiKind[id];
-    if (k == 1 || k == 2) {
+    if (k == 1 || k == 2 || k == 4) {
         return tui_text_height(st.fontSize) + st.padT + st.padB;
     }
     if (k == 3) {
         return tui_image_height(uiText[id]) + st.padT + st.padB;
     }
+    if (k == 5) { return 16.0 + st.padT + st.padB; }
     let total = 0.0;
     let maxc = 0.0;
     let n = uiChildren[id].len();
