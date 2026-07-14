@@ -32,6 +32,7 @@ static mut uiVal: Vec<double> = Vec();          // slider / progress value (0..1
 static mut uiScrollY: Vec<double> = Vec();      // scroll offset for overflow boxes
 static mut uiContentH: Vec<double> = Vec();     // measured full content height (for scroll)
 static mut uiIcon: Vec<string> = Vec();         // icon image path drawn before text ("" = none)
+static mut uiPassword: Vec<bool> = Vec();       // mask an input's value with bullets
 static mut uiOptions: Vec<Vec<string>> = Vec(); // dropdown options (kind 11)
 static mut uiOpenSelect: long = -1L;            // the currently-open dropdown, or -1
 
@@ -85,6 +86,7 @@ function uiNew(kind: int, text: string): long {
     uiScrollY.push(0.0);
     uiContentH.push(0.0);
     uiIcon.push("");
+    uiPassword.push(false);
     let opts: Vec<string> = Vec();
     uiOptions.push(opts);
     return id;
@@ -110,6 +112,14 @@ function uiTextarea(placeholder: string): long {
     uiPlaceholder[id] = placeholder;
     return id;
 }
+/// A single-line input whose value is masked with bullets (for passwords).
+function uiPasswordInput(placeholder: string): long {
+    let id = uiInput(placeholder);
+    uiPassword[id] = true;
+    return id;
+}
+/// Toggle masking on any input.
+function uiSetPassword(id: long, masked: bool): void { uiPassword[id] = masked; }
 /// A radio button in `group`. Selecting one deselects the others in the same group.
 function uiRadio(group: string): long {
     let id = uiNew(7, "");

@@ -673,3 +673,17 @@ function clipboardPaste(): void {
     assertEq(uiValue(inp), "");
     uiBlur();
 }
+
+@test
+function passwordMasking(): void {
+    let pw = uiPasswordInput("password");
+    uiFocus(pw);
+    tuiTextInput(104); tuiTextInput(105);   // "hi"
+    assertEq(uiValue(pw), "hi");            // the real value is kept
+    // masking is a render-only concern; the value round-trips unchanged
+    let plain = uiInput("x");
+    uiSetPassword(plain, true);
+    uiSetValue(plain, "secret");
+    assertEq(uiValue(plain), "secret");
+    uiBlur();
+}

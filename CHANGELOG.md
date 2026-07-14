@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.4.1
+
+- `uiPasswordInput(placeholder)` / `uiSetPassword(id, masked)` — mask an input's
+  value with bullets (for login/password fields). The real value round-trips
+  through `uiValue` unchanged; only the rendering is masked.
+
 ## 0.4.0
 
 **Icons & images on elements**

@@ -169,6 +169,7 @@ function uiPaintField(id: long, st: TuiStyle, x: double, y: double,
     let val = uiText[id];
     let empty = val.len() == 0L;
     let shownText = val;
+    if (!empty && uiPassword[id]) { shownText = "•".repeat(val.charLen() as int); }
     if (empty) { shownText = uiPlaceholder[id]; }
 
     if (isArea) {
@@ -189,9 +190,9 @@ function uiPaintField(id: long, st: TuiStyle, x: double, y: double,
     } else {
         let ty = y + (h - lh) / 2.0;
         if (empty) { tui_text(shownText, cx, ty, st.fontSize, 0, 0.6, 0.62, 0.66, op); }
-        else { tui_text(val, cx, ty, st.fontSize, bold, st.fgR, st.fgG, st.fgB, st.fgA * op); }
+        else { tui_text(shownText, cx, ty, st.fontSize, bold, st.fgR, st.fgG, st.fgB, st.fgA * op); }
         if (uiFocusId == id) {
-            let head = uiStrHead(val, uiCaret[id]);
+            let head = uiStrHead(shownText, uiCaret[id]);
             let cxp = cx + tui_text_width(head, st.fontSize, bold);
             tui_rect(cxp, ty, 1.5, lh, 0.0, st.fgR, st.fgG, st.fgB, op);
         }
