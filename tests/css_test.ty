@@ -1,0 +1,206 @@
+// TachyonUI engine tests — run with `tachyon test` in lib/tachyonui.
+// Headless: no window is created; widgets/rules accumulate across tests,
+// so each test uses unique class names.
+
+@test
+function colorParsing(): void {
+    let c = cssColor("#ff0000");
+    assert(c.ok);
+    assertEq(c.r, 1.0);
+    assertEq(c.g, 0.0);
+    assertEq(c.b, 0.0);
+    assertEq(c.a, 1.0);
+
+    let short = cssColor("#0f0");
+    assert(short.ok);
+    assertEq(short.g, 1.0);
+
+    let alpha = cssColor("#00000080");
+    assert(alpha.ok);
+    assert(alpha.a > 0.49 && alpha.a < 0.52);
+
+    let rgb = cssColor("rgb(255, 0, 255)");
+    assert(rgb.ok);
+    assertEq(rgb.r, 1.0);
+    assertEq(rgb.b, 1.0);
+
+    let rgba = cssColor("rgba(0, 0, 0, 0.25)");
+    assert(rgba.ok);
+    assertEq(rgba.a, 0.25);
+
+    assert(cssColor("white").ok);
+    assert(cssColor("transparent").ok);
+    assertEq(cssColor("transparent").a, 0.0);
+    assert(!cssColor("notacolor").ok);
+    assert(!cssColor("#12345").ok);
+}
+
+@test
+function lengthParsing(): void {
+    assertEq(cssLen("42px"), 42.0);
+    assertEq(cssLen(" 7 "), 7.0);
+    assertEq(cssLen("auto"), -1.0);
+    assert(cssIsPct("50%"));
+    assertEq(cssPct("50%"), 50.0);
+}
+
+@test
+function selectorsAndSpecificity(): void {
+    let b = uiButton("x");
+    uiAddClass(b, "t3primary");
+    uiSetId(b, "t3go");
+
+    cssParse("button { color: #111111; } "
+             + ".t3primary { color: #00ff00; } "
+             + "#t3go { color: #0000ff; }");
+    let st = cssCompute(b, false);
+    assertEq(st.fgB, 1.0);      // #id (100) beats .class (10) beats tag (1)
+    assertEq(st.fgG, 0.0);
+
+    // later rule wins a specificity tie
+    let l = uiLabel("y");
+    uiAddClass(l, "t3a");
+    uiAddClass(l, "t3b");
+    cssParse(".t3a { font-size: 20px; } .t3b { font-size: 30px; }");
+    assertEq(cssCompute(l, false).fontSize, 30.0);
+}
+
+@test
+function hoverRules(): void {
+    let b = uiButton("x");
+    uiAddClass(b, "t4hov");
+    cssParse(".t4hov { background-color: #ff0000; } "
+             + ".t4hov:hover { background-color: #00ff00; }");
+    assertEq(cssCompute(b, false).bgR, 1.0);
+    assertEq(cssCompute(b, false).bgG, 0.0);
+    assertEq(cssCompute(b, true).bgG, 1.0);
+    assertEq(cssCompute(b, true).bgR, 0.0);
+}
+
+@test
+function shorthands(): void {
+    let x = uiBox();
+    uiAddClass(x, "t5pad");
+    cssParse(".t5pad { padding: 4px 8px; margin: 1px 2px 3px 4px; "
+             + "border: 2px solid #ff0000; }");
+    let st = cssCompute(x, false);
+    assertEq(st.padT, 4.0);
+    assertEq(st.padB, 4.0);
+    assertEq(st.padL, 8.0);
+    assertEq(st.padR, 8.0);
+    assertEq(st.marT, 1.0);
+    assertEq(st.marR, 2.0);
+    assertEq(st.marB, 3.0);
+    assertEq(st.marL, 4.0);
+    assertEq(st.borderWidth, 2.0);
+    assertEq(st.boR, 1.0);
+}
+
+@test
+function commentsAndUnknowns(): void {
+    let x = uiBox();
+    uiAddClass(x, "t6c");
+    cssParse("/* comment { width: 999px; } */ .t6c { width: 50px; "
+             + "made-up-property: 12; } /* trailing */");
+    assertEq(cssCompute(x, false).width, 50.0);
+}
+
+@test
+function columnLayout(): void {
+    let root = uiBox();
+    uiSetId(root, "t7root");
+    let a = uiBox();
+    uiAddClass(a, "t7a");
+    let b = uiBox();
+    uiAddClass(b, "t7b");
+    uiAppend(root, a);
+    uiAppend(root, b);
+    cssParse("#t7root { padding: 10px; gap: 5px; } "
+             + ".t7a { width: 100px; height: 40px; } "
+             + ".t7b { height: 60px; }");
+    uiSetRoot(root);
+    uiComputeStyles();
+    uiLayoutRoot(800.0, 600.0);
+
+    assertEq(uiW[root], 800.0);
+    assertEq(uiH[root], 600.0);
+    assertEq(uiX[a], 10.0);
+    assertEq(uiY[a], 10.0);
+    assertEq(uiW[a], 100.0);
+    assertEq(uiH[a], 40.0);
+    assertEq(uiY[b], 55.0);          // 10 + 40 + 5
+    assertEq(uiW[b], 780.0);         // auto box stretches (align-items: stretch)
+}
+
+@test
+function rowJustifyCenter(): void {
+    let root = uiBox();
+    uiSetId(root, "t8root");
+    let a = uiBox();
+    uiAddClass(a, "t8i");
+    let b = uiBox();
+    uiAddClass(b, "t8i");
+    uiAppend(root, a);
+    uiAppend(root, b);
+    cssParse("#t8root { flex-direction: row; justify-content: center; "
+             + "align-items: center; gap: 10px; } "
+             + ".t8i { width: 50px; height: 20px; }");
+    uiSetRoot(root);
+    uiComputeStyles();
+    uiLayoutRoot(400.0, 100.0);
+
+    // content 400 wide, items 50+10+50=110, leftover 290 → first at 145
+    assertEq(uiX[a], 145.0);
+    assertEq(uiX[b], 205.0);
+    assertEq(uiY[a], 40.0);          // (100-20)/2
+}
+
+@test
+function hitTestingAndHandlers(): void {
+    let root = uiBox();
+    uiSetId(root, "t9root");
+    let btn = uiButton("hit me");
+    uiAddClass(btn, "t9btn");
+    uiAppend(root, btn);
+    cssParse("#t9root { padding: 20px; } .t9btn { width: 80px; height: 30px; }");
+    uiSetRoot(root);
+    uiComputeStyles();
+    uiLayoutRoot(300.0, 200.0);
+
+    uiMouseX = 25.0;
+    uiMouseY = 25.0;
+    assertEq(uiHitTest(), btn);
+    uiMouseX = 150.0;
+    uiMouseY = 150.0;
+    assertEq(uiHitTest(), root);
+
+    // click dispatch finds the nearest ancestor handler
+    uiOnClick(root, (id: long) => {
+        uiSetText(root, "clicked");
+    });
+    let hi = uiFindHandler(btn);
+    assert(hi >= 0L);
+    assertEq(uiClickIds[hi], root);
+    tuiMouseDown(25.0, 25.0);
+    tuiMouseUp(25.0, 25.0);
+    assertEq(uiGetText(root), "clicked");
+}
+
+@test
+function imageElement(): void {
+    // 24x16 PNG generated by the test harness
+    if (fileExists("/tmp/tachyon_test_img.png")) {
+        assertEq(tui_image_width("/tmp/tachyon_test_img.png"), 24.0);
+        assertEq(tui_image_height("/tmp/tachyon_test_img.png"), 16.0);
+        let img = uiImage("/tmp/tachyon_test_img.png");
+        uiSetId(img, "t10img");
+        let root = uiBox();
+        uiAppend(root, img);
+        uiSetRoot(root);
+        uiComputeStyles();
+        uiLayoutRoot(300.0, 200.0);
+        assertEq(uiW[img], 24.0);        // natural size when width/height are auto
+        assertEq(uiH[img], 16.0);
+    }
+    assertEq(tui_image_width("/tmp/no_such_image.png"), 0.0);
+}

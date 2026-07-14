@@ -1,0 +1,147 @@
+// TachyonUI — layout engine (flexbox-lite).
+//
+// Border-box sizing. Boxes lay children out along flex-direction with
+// gap / justify-content / align-items. width/height accept px, %, auto.
+// Leaves (label/button/img) size to content when auto; auto-sized child
+// boxes stretch on the cross axis when align-items is stretch (the default).
+
+function uiBoldInt(st: TuiStyle): int {
+    return if (st.bold) 1 else 0;
+}
+
+function uiMeasureW(id: long): double {
+    let st = uiStyle[id];
+    if (!st.widthPct && st.width >= 0.0) { return st.width; }
+    let k = uiKind[id];
+    if (k == 1 || k == 2) {
+        return tui_text_width(uiText[id], st.fontSize, uiBoldInt(st)) + st.padL + st.padR;
+    }
+    if (k == 3) {
+        return tui_image_width(uiText[id]) + st.padL + st.padR;
+    }
+    let total = 0.0;
+    let maxc = 0.0;
+    let n = uiChildren[id].len();
+    for (c in uiChildren[id]) {
+        let cw = uiMeasureW(c) + uiStyle[c].marL + uiStyle[c].marR;
+        total += cw;
+        if (cw > maxc) { maxc = cw; }
+    }
+    let inner = maxc;
+    if (st.row) {
+        inner = total;
+        if (n > 1L) { inner += st.gap * ((n - 1L) as double); }
+    }
+    return inner + st.padL + st.padR;
+}
+
+function uiMeasureH(id: long): double {
+    let st = uiStyle[id];
+    if (!st.heightPct && st.height >= 0.0) { return st.height; }
+    let k = uiKind[id];
+    if (k == 1 || k == 2) {
+        return tui_text_height(st.fontSize) + st.padT + st.padB;
+    }
+    if (k == 3) {
+        return tui_image_height(uiText[id]) + st.padT + st.padB;
+    }
+    let total = 0.0;
+    let maxc = 0.0;
+    let n = uiChildren[id].len();
+    for (c in uiChildren[id]) {
+        let ch = uiMeasureH(c) + uiStyle[c].marT + uiStyle[c].marB;
+        total += ch;
+        if (ch > maxc) { maxc = ch; }
+    }
+    let inner = total;
+    if (st.row) { inner = maxc; }
+    else if (n > 1L) { inner += st.gap * ((n - 1L) as double); }
+    return inner + st.padT + st.padB;
+}
+
+function uiLayoutRoot(winW: double, winH: double): void {
+    let st = uiStyle[uiRootId];
+    let w = winW;
+    let h = winH;
+    if (st.widthPct) { w = winW * st.width / 100.0; }
+    else if (st.width >= 0.0) { w = st.width; }
+    if (st.heightPct) { h = winH * st.height / 100.0; }
+    else if (st.height >= 0.0) { h = st.height; }
+    uiArrange(uiRootId, st.marL, st.marT, w, h);
+}
+
+function uiArrange(id: long, x: double, y: double, w: double, h: double): void {
+    uiX[id] = x;
+    uiY[id] = y;
+    uiW[id] = w;
+    uiH[id] = h;
+    let st = uiStyle[id];
+    let kids = uiChildren[id];
+    let n = kids.len();
+    if (n == 0L) { return; }
+
+    let cx = x + st.padL;
+    let cy = y + st.padT;
+    let cw = w - st.padL - st.padR;
+    let chh = h - st.padT - st.padB;
+
+    // resolve child sizes
+    let ws: Vec<double> = Vec();
+    let hs: Vec<double> = Vec();
+    let totalMain = 0.0;
+    for (c in kids) {
+        let cs = uiStyle[c];
+        let cwid = 0.0;
+        if (cs.widthPct) { cwid = cw * cs.width / 100.0; }
+        else if (cs.width >= 0.0) { cwid = cs.width; }
+        else if (!st.row && st.align == 3 && uiKind[c] == 0) {
+            cwid = cw - cs.marL - cs.marR;         // stretch cross axis (column)
+        }
+        else { cwid = uiMeasureW(c); }
+        let chei = 0.0;
+        if (cs.heightPct) { chei = chh * cs.height / 100.0; }
+        else if (cs.height >= 0.0) { chei = cs.height; }
+        else if (st.row && st.align == 3 && uiKind[c] == 0) {
+            chei = chh - cs.marT - cs.marB;        // stretch cross axis (row)
+        }
+        else { chei = uiMeasureH(c); }
+        ws.push(cwid);
+        hs.push(chei);
+        if (st.row) { totalMain += cwid + cs.marL + cs.marR; }
+        else { totalMain += chei + cs.marT + cs.marB; }
+    }
+
+    let gaps = 0.0;
+    if (n > 1L) { gaps = st.gap * ((n - 1L) as double); }
+    let mainAvail = chh;
+    if (st.row) { mainAvail = cw; }
+    let leftover = mainAvail - totalMain - gaps;
+
+    let pos = 0.0;
+    let extra = 0.0;
+    if (st.justify == 1) { pos = leftover / 2.0; }
+    else if (st.justify == 2) { pos = leftover; }
+    else if (st.justify == 3 && n > 1L && leftover > 0.0) {
+        extra = leftover / ((n - 1L) as double);
+    }
+
+    for (i in 0L..n) {
+        let c = kids[i];
+        let cs = uiStyle[c];
+        if (st.row) {
+            let chX = cx + pos + cs.marL;
+            let chY = cy + cs.marT;
+            if (st.align == 1) { chY = cy + (chh - hs[i]) / 2.0; }
+            else if (st.align == 2) { chY = cy + chh - hs[i] - cs.marB; }
+            uiArrange(c, chX, chY, ws[i], hs[i]);
+            pos += cs.marL + ws[i] + cs.marR + st.gap + extra;
+        } else {
+            let chX = cx + cs.marL;
+            let chY = cy + pos + cs.marT;
+            if (st.align == 1) { chX = cx + (cw - ws[i]) / 2.0; }
+            else if (st.align == 2) { chX = cx + cw - ws[i] - cs.marR; }
+            uiArrange(c, chX, chY, ws[i], hs[i]);
+            pos += cs.marT + hs[i] + cs.marB + st.gap + extra;
+        }
+    }
+}

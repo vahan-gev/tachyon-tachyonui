@@ -1,0 +1,419 @@
+// TachyonUI — CSS engine (parser, selector matching, specificity, computed styles).
+// Supported selectors: tag (box/label/button/img), .class, #id, :hover, *,
+// and combinations like button.primary:hover. One simple selector per rule
+// (no descendant combinators in v0.1).
+
+struct TuiColor {
+    r: double;
+    g: double;
+    b: double;
+    a: double;
+    ok: bool;
+}
+
+// computed style — border-box sizing; width/height: -1 = auto
+struct TuiStyle {
+    bgR: double = 0.0;  bgG: double = 0.0;  bgB: double = 0.0;  bgA: double = 0.0;
+    fgR: double = 0.07; fgG: double = 0.09; fgB: double = 0.12; fgA: double = 1.0;
+    boR: double = 0.0;  boG: double = 0.0;  boB: double = 0.0;  boA: double = 0.0;
+    borderWidth: double = 0.0;
+    radius: double = 0.0;
+    fontSize: double = 14.0;
+    bold: bool = false;
+    padL: double = 0.0; padR: double = 0.0; padT: double = 0.0; padB: double = 0.0;
+    marL: double = 0.0; marR: double = 0.0; marT: double = 0.0; marB: double = 0.0;
+    width: double = -1.0;  widthPct: bool = false;
+    height: double = -1.0; heightPct: bool = false;
+    row: bool = false;      // flex-direction
+    gap: double = 0.0;
+    justify: int = 0;       // 0 start, 1 center, 2 end, 3 space-between
+    align: int = 3;         // 0 start, 1 center, 2 end, 3 stretch (boxes only)
+    cursor: int = 0;        // 0 default, 1 pointer, 2 text
+}
+
+struct TuiRule {
+    tag: string;
+    idName: string;
+    classes: Vec<string>;
+    hover: bool;
+    spec: int;
+    order: int;
+    props: Vec<string>;
+    vals: Vec<string>;
+}
+
+static mut cssRules: Vec<TuiRule> = Vec();
+static mut cssOrder: int = 0;
+
+static CSS_NAME_CHARS: string =
+    "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789-_";
+
+// ---- parsing --------------------------------------------------------------
+
+function cssStripComments(s0: string): string {
+    let s = s0;
+    while (true) {
+        let a = s.indexOf("/*");
+        if (a < 0L) { break; }
+        let b = s.indexOf("*/");
+        if (b < a) { break; }
+        s = s.sub(0L, a) + s.sub(b + 2L, s.len());
+    }
+    return s;
+}
+
+function cssBadRule(): TuiRule {
+    let c: Vec<string> = Vec();
+    let p: Vec<string> = Vec();
+    let v: Vec<string> = Vec();
+    return TuiRule("", "", c, false, -1, 0, p, v);
+}
+
+function cssParseSelector(sel0: string): TuiRule {
+    let sel = sel0.trim();
+    if (sel == "") { return cssBadRule(); }
+    let classes: Vec<string> = Vec();
+    let dp: Vec<string> = Vec();
+    let dv: Vec<string> = Vec();
+    if (sel == "*") { return TuiRule("", "", classes, false, 0, 0, dp, dv); }
+
+    let n = sel.len();
+    let i: long = 0L;
+    while (i < n && CSS_NAME_CHARS.contains(sel.charAt(i))) { i += 1L; }
+    let tag = sel.sub(0L, i).toLower();
+    if (tag == "image") { tag = "img"; }
+    let idn = "";
+    let hover = false;
+    let specTag = 0;
+    if (tag != "") { specTag = 1; }
+    let specCls = 0;
+    let specId = 0;
+
+    while (i < n) {
+        let c = sel.charAt(i);
+        i += 1L;
+        let j = i;
+        while (j < n && CSS_NAME_CHARS.contains(sel.charAt(j))) { j += 1L; }
+        let name = sel.sub(i, j);
+        i = j;
+        if (c == ".") {
+            if (name == "") { return cssBadRule(); }
+            classes.push(name);
+            specCls += 1;
+        } else if (c == "#") {
+            if (name == "") { return cssBadRule(); }
+            idn = name;
+            specId += 1;
+        } else if (c == ":") {
+            if (name.toLower() != "hover") { return cssBadRule(); }
+            hover = true;
+            specCls += 1;
+        } else {
+            return cssBadRule();     // combinators / unknown syntax
+        }
+    }
+    let spec = specId * 100 + specCls * 10 + specTag;
+    return TuiRule(tag, idn, classes, hover, spec, 0, dp, dv);
+}
+
+// parse a stylesheet and append its rules (later rules win ties)
+function cssParse(cssIn: string): void {
+    let text = cssStripComments(cssIn);
+    while (true) {
+        let ob = text.indexOf("{");
+        if (ob < 0L) { break; }
+        let cb = text.indexOf("}");
+        if (cb < ob) { break; }
+        let selPart = text.sub(0L, ob);
+        let body = text.sub(ob + 1L, cb);
+        text = text.sub(cb + 1L, text.len());
+
+        let props: Vec<string> = Vec();
+        let vals: Vec<string> = Vec();
+        for (d in body.split(";")) {
+            let ci = d.indexOf(":");
+            if (ci < 0L) { continue; }
+            let p = d.sub(0L, ci).trim().toLower();
+            let v = d.sub(ci + 1L, d.len()).trim();
+            if (p != "" && v != "") {
+                props.push(p);
+                vals.push(v);
+            }
+        }
+        for (sel in selPart.split(",")) {
+            let r = cssParseSelector(sel);
+            if (r.spec >= 0) {
+                cssRules.push(TuiRule(r.tag, r.idName, r.classes.clone(), r.hover,
+                                      r.spec, cssOrder, props.clone(), vals.clone()));
+                cssOrder += 1;
+            }
+        }
+    }
+}
+
+// ---- values ---------------------------------------------------------------
+
+function cssHexDigit(c: string): long {
+    return "0123456789abcdef".indexOf(c);
+}
+
+function cssColor(v0: string): TuiColor {
+    let v = v0.trim().toLower();
+    let bad = TuiColor(0.0, 0.0, 0.0, 0.0, false);
+
+    if (v.startsWith("#")) {
+        let h = v.sub(1L, v.len());
+        let n = h.len();
+        let d: Vec<long> = Vec();
+        for (i in 0L..n) { d.push(cssHexDigit(h.charAt(i))); }
+        for (x in d) { if (x < 0L) { return bad; } }
+        if (n == 3L) {
+            return TuiColor(((d[0] * 17L) as double) / 255.0,
+                            ((d[1] * 17L) as double) / 255.0,
+                            ((d[2] * 17L) as double) / 255.0, 1.0, true);
+        }
+        if (n == 6L || n == 8L) {
+            let r = ((d[0] * 16L + d[1]) as double) / 255.0;
+            let g = ((d[2] * 16L + d[3]) as double) / 255.0;
+            let b = ((d[4] * 16L + d[5]) as double) / 255.0;
+            let a = 1.0;
+            if (n == 8L) { a = ((d[6] * 16L + d[7]) as double) / 255.0; }
+            return TuiColor(r, g, b, a, true);
+        }
+        return bad;
+    }
+    if (v.startsWith("rgb")) {
+        let o = v.indexOf("(");
+        let c = v.indexOf(")");
+        if (o < 0L || c < o) { return bad; }
+        let parts = v.sub(o + 1L, c).split(",");
+        if (parts.len() < 3L) { return bad; }
+        let r = parseFloatOr(parts[0].trim(), 0.0) / 255.0;
+        let g = parseFloatOr(parts[1].trim(), 0.0) / 255.0;
+        let b = parseFloatOr(parts[2].trim(), 0.0) / 255.0;
+        let a = 1.0;
+        if (parts.len() >= 4L) { a = parseFloatOr(parts[3].trim(), 1.0); }
+        return TuiColor(r, g, b, a, true);
+    }
+    match (v) {
+        "transparent" => { return TuiColor(0.0, 0.0, 0.0, 0.0, true); }
+        "white"       => { return TuiColor(1.0, 1.0, 1.0, 1.0, true); }
+        "black"       => { return TuiColor(0.0, 0.0, 0.0, 1.0, true); }
+        "red"         => { return TuiColor(0.86, 0.15, 0.15, 1.0, true); }
+        "green"       => { return TuiColor(0.13, 0.65, 0.33, 1.0, true); }
+        "blue"        => { return TuiColor(0.15, 0.39, 0.92, 1.0, true); }
+        "orange"      => { return TuiColor(0.96, 0.57, 0.10, 1.0, true); }
+        "yellow"      => { return TuiColor(0.98, 0.80, 0.18, 1.0, true); }
+        "purple"      => { return TuiColor(0.55, 0.29, 0.86, 1.0, true); }
+        "teal"        => { return TuiColor(0.05, 0.59, 0.61, 1.0, true); }
+        "gray" | "grey"           => { return TuiColor(0.42, 0.45, 0.50, 1.0, true); }
+        "lightgray" | "lightgrey" => { return TuiColor(0.83, 0.84, 0.86, 1.0, true); }
+        "darkgray" | "darkgrey"   => { return TuiColor(0.25, 0.27, 0.30, 1.0, true); }
+        _ => { return bad; }
+    }
+}
+
+// px length; -1 for auto / invalid
+function cssLen(v0: string): double {
+    let v = v0.trim().toLower();
+    if (v == "auto") { return -1.0; }
+    if (v.endsWith("px")) { v = v.sub(0L, v.len() - 2L).trim(); }
+    return parseFloatOr(v, -1.0);
+}
+
+function cssIsPct(v: string): bool {
+    return v.trim().endsWith("%");
+}
+
+function cssPct(v0: string): double {
+    let v = v0.trim();
+    return parseFloatOr(v.sub(0L, v.len() - 1L), 0.0);
+}
+
+// whitespace-split with empty parts dropped
+function cssWords(v: string): Vec<string> {
+    let out: Vec<string> = Vec();
+    for (p in v.split(" ")) {
+        let t = p.trim();
+        if (t != "") { out.push(t); }
+    }
+    return out;
+}
+
+// ---- applying declarations ------------------------------------------------
+
+function cssApplyProp(st0: TuiStyle, p: string, v: string): TuiStyle {
+    let st = st0;
+    match (p) {
+        "width" => {
+            if (cssIsPct(v)) { st.width = cssPct(v); st.widthPct = true; }
+            else { st.width = cssLen(v); st.widthPct = false; }
+        }
+        "height" => {
+            if (cssIsPct(v)) { st.height = cssPct(v); st.heightPct = true; }
+            else { st.height = cssLen(v); st.heightPct = false; }
+        }
+        "background" | "background-color" => {
+            let c = cssColor(v);
+            if (c.ok) { st.bgR = c.r; st.bgG = c.g; st.bgB = c.b; st.bgA = c.a; }
+        }
+        "color" => {
+            let c = cssColor(v);
+            if (c.ok) { st.fgR = c.r; st.fgG = c.g; st.fgB = c.b; st.fgA = c.a; }
+        }
+        "border-color" => {
+            let c = cssColor(v);
+            if (c.ok) { st.boR = c.r; st.boG = c.g; st.boB = c.b; st.boA = c.a; }
+        }
+        "border-width" => { st.borderWidth = cssLen(v); }
+        "border-radius" => { st.radius = cssLen(v); }
+        "border" => {
+            // e.g. "1px solid #cccccc" — style keyword is accepted and ignored
+            for (w in cssWords(v)) {
+                let c = cssColor(w);
+                if (c.ok) { st.boR = c.r; st.boG = c.g; st.boB = c.b; st.boA = c.a; }
+                else {
+                    let n = cssLen(w);
+                    if (n >= 0.0) { st.borderWidth = n; }
+                }
+            }
+            if (st.boA == 0.0) { st.boR = 0.0; st.boG = 0.0; st.boB = 0.0; st.boA = 1.0; }
+        }
+        "padding" => {
+            let ws = cssWords(v);
+            if (ws.len() == 1L) {
+                let a = cssLen(ws[0]);
+                st.padT = a; st.padR = a; st.padB = a; st.padL = a;
+            } else if (ws.len() == 2L) {
+                let tb = cssLen(ws[0]);
+                let lr = cssLen(ws[1]);
+                st.padT = tb; st.padB = tb; st.padL = lr; st.padR = lr;
+            } else if (ws.len() == 3L) {
+                st.padT = cssLen(ws[0]);
+                let lr = cssLen(ws[1]);
+                st.padL = lr; st.padR = lr;
+                st.padB = cssLen(ws[2]);
+            } else if (ws.len() >= 4L) {
+                st.padT = cssLen(ws[0]); st.padR = cssLen(ws[1]);
+                st.padB = cssLen(ws[2]); st.padL = cssLen(ws[3]);
+            }
+        }
+        "padding-left"   => { st.padL = cssLen(v); }
+        "padding-right"  => { st.padR = cssLen(v); }
+        "padding-top"    => { st.padT = cssLen(v); }
+        "padding-bottom" => { st.padB = cssLen(v); }
+        "margin" => {
+            let ws = cssWords(v);
+            if (ws.len() == 1L) {
+                let a = cssLen(ws[0]);
+                st.marT = a; st.marR = a; st.marB = a; st.marL = a;
+            } else if (ws.len() == 2L) {
+                let tb = cssLen(ws[0]);
+                let lr = cssLen(ws[1]);
+                st.marT = tb; st.marB = tb; st.marL = lr; st.marR = lr;
+            } else if (ws.len() == 3L) {
+                st.marT = cssLen(ws[0]);
+                let lr = cssLen(ws[1]);
+                st.marL = lr; st.marR = lr;
+                st.marB = cssLen(ws[2]);
+            } else if (ws.len() >= 4L) {
+                st.marT = cssLen(ws[0]); st.marR = cssLen(ws[1]);
+                st.marB = cssLen(ws[2]); st.marL = cssLen(ws[3]);
+            }
+        }
+        "margin-left"   => { st.marL = cssLen(v); }
+        "margin-right"  => { st.marR = cssLen(v); }
+        "margin-top"    => { st.marT = cssLen(v); }
+        "margin-bottom" => { st.marB = cssLen(v); }
+        "font-size" => { st.fontSize = cssLen(v); }
+        "font-weight" => {
+            let w = v.toLower();
+            st.bold = w == "bold" || w == "600" || w == "700" || w == "800" || w == "900";
+        }
+        "flex-direction" => { st.row = v.toLower() == "row"; }
+        "gap" => { st.gap = cssLen(v); }
+        "justify-content" => {
+            match (v.toLower()) {
+                "flex-start" | "start" => { st.justify = 0; }
+                "center"               => { st.justify = 1; }
+                "flex-end" | "end"     => { st.justify = 2; }
+                "space-between"        => { st.justify = 3; }
+                _ => { }
+            }
+        }
+        "align-items" => {
+            match (v.toLower()) {
+                "flex-start" | "start" => { st.align = 0; }
+                "center"               => { st.align = 1; }
+                "flex-end" | "end"     => { st.align = 2; }
+                "stretch"              => { st.align = 3; }
+                _ => { }
+            }
+        }
+        "cursor" => {
+            match (v.toLower()) {
+                "pointer"        => { st.cursor = 1; }
+                "text" | "ibeam" => { st.cursor = 2; }
+                _                => { st.cursor = 0; }
+            }
+        }
+        _ => { }     // unknown properties are ignored, like a browser
+    }
+    return st;
+}
+
+// ---- matching + computing -------------------------------------------------
+
+function cssKindTag(kind: int): string {
+    if (kind == 0) { return "box"; }
+    if (kind == 1) { return "label"; }
+    if (kind == 2) { return "button"; }
+    return "img";
+}
+
+function cssRuleMatches(r: &TuiRule, w: long, hovered: bool): bool {
+    if (r.hover && !hovered) { return false; }
+    if (r.tag != "" && r.tag != cssKindTag(uiKind[w])) { return false; }
+    if (r.idName != "" && r.idName != uiIdName[w]) { return false; }
+    for (c in r.classes) {
+        if (!uiHasClass(w, c)) { return false; }
+    }
+    return true;
+}
+
+// cascade: matching rules applied in (specificity, source order) order
+function cssCompute(w: long, hovered: bool): TuiStyle {
+    let matched: Vec<long> = Vec();
+    for (ri in 0L..cssRules.len()) {
+        if (cssRuleMatches(&cssRules[ri], w, hovered)) { matched.push(ri); }
+    }
+    // stable insertion sort by specificity (equal spec keeps source order)
+    let i: long = 1L;
+    while (i < matched.len()) {
+        let key = matched[i];
+        let kSpec = cssRules[key].spec;
+        let j = i - 1L;
+        while (j >= 0L && cssRules[matched[j]].spec > kSpec) {
+            matched[j + 1L] = matched[j];
+            j -= 1L;
+        }
+        matched[j + 1L] = key;
+        i += 1L;
+    }
+    let st = TuiStyle();
+    for (mi in matched) {
+        let r = cssRules[mi];
+        for (k in 0L..r.props.len()) {
+            st = cssApplyProp(st, r.props[k], r.vals[k]);
+        }
+    }
+    return st;
+}
+
+// user-agent defaults (lowest precedence: parsed first, order wins ties)
+function cssLoadDefaults(): void {
+    cssParse("button { background-color: #e8eaef; color: #16181d; "
+             + "padding: 7px 16px; border-radius: 7px; border-width: 1px; "
+             + "border-color: #c8ccd4; cursor: pointer; } "
+             + "button:hover { background-color: #d9dce3; }");
+}

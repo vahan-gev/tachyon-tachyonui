@@ -1,0 +1,248 @@
+// TachyonUI — widget tree, public API, and event dispatch.
+//
+// Widgets are ids (long) into parallel stores. Elements:
+//   uiBox()      — container (CSS tag: box)     ~ div
+//   uiLabel(s)   — text      (CSS tag: label)
+//   uiButton(s)  — clickable (CSS tag: button)
+//   uiImage(p)   — picture   (CSS tag: img)
+// Every element is styled with CSS via uiCss / uiCssFile.
+
+// ---- widget stores (id = index) ----
+static mut uiKind: Vec<int> = Vec();            // 0 box, 1 label, 2 button, 3 image
+static mut uiText: Vec<string> = Vec();         // text, or image path
+static mut uiIdName: Vec<string> = Vec();       // css #id
+static mut uiClasses: Vec<Vec<string>> = Vec();
+static mut uiChildren: Vec<Vec<long>> = Vec();
+static mut uiParent: Vec<long> = Vec();
+static mut uiStyle: Vec<TuiStyle> = Vec();      // computed each frame
+static mut uiX: Vec<double> = Vec();            // layout results
+static mut uiY: Vec<double> = Vec();
+static mut uiW: Vec<double> = Vec();
+static mut uiH: Vec<double> = Vec();
+
+static mut uiRootId: long = -1L;
+static mut uiMouseX: double = -1.0;
+static mut uiMouseY: double = -1.0;
+static mut uiHoverId: long = -1L;
+static mut uiPressedId: long = -1L;
+
+static mut uiClickIds: Vec<long> = Vec();       // parallel: widget id -> handler
+static mut uiClickFns: Vec<(long) => void> = Vec();
+static mut uiKeyFns: Vec<(int) => void> = Vec();
+
+// ---- construction ----
+function uiInit(title: string, w: int, h: int): void {
+    tui_create_window(title, w, h);
+    cssLoadDefaults();
+}
+
+function uiNew(kind: int, text: string): long {
+    let id = uiKind.len();
+    uiKind.push(kind);
+    uiText.push(text);
+    uiIdName.push("");
+    let cls: Vec<string> = Vec();
+    uiClasses.push(cls);
+    let ch: Vec<long> = Vec();
+    uiChildren.push(ch);
+    uiParent.push(-1L);
+    uiStyle.push(TuiStyle());
+    uiX.push(0.0);
+    uiY.push(0.0);
+    uiW.push(0.0);
+    uiH.push(0.0);
+    return id;
+}
+
+function uiBox(): long            { return uiNew(0, ""); }
+function uiLabel(text: string): long  { return uiNew(1, text); }
+function uiButton(text: string): long { return uiNew(2, text); }
+function uiImage(path: string): long  { return uiNew(3, path); }
+
+function uiAppend(parent: long, child: long): void {
+    uiChildren[parent].push(child);
+    uiParent[child] = parent;
+}
+
+function uiSetRoot(id: long): void { uiRootId = id; }
+
+// ---- attributes ----
+function uiSetText(id: long, text: string): void {
+    uiText[id] = text;
+    tui_redraw();
+}
+function uiGetText(id: long): string { return uiText[id]; }
+
+function uiSetId(id: long, name: string): void { uiIdName[id] = name; }
+
+function uiAddClass(id: long, cls: string): void {
+    if (!uiHasClass(id, cls)) {
+        uiClasses[id].push(cls);
+        tui_redraw();
+    }
+}
+
+function uiRemoveClass(id: long, cls: string): void {
+    let kept: Vec<string> = Vec();
+    for (c in uiClasses[id]) {
+        if (c != cls) { kept.push(c); }
+    }
+    uiClasses[id] = kept;
+    tui_redraw();
+}
+
+function uiToggleClass(id: long, cls: string): void {
+    if (uiHasClass(id, cls)) { uiRemoveClass(id, cls); }
+    else { uiAddClass(id, cls); }
+}
+
+function uiHasClass(id: long, cls: string): bool {
+    for (c in uiClasses[id]) {
+        if (c == cls) { return true; }
+    }
+    return false;
+}
+
+// ---- styling ----
+function uiCss(css: string): void {
+    cssParse(css);
+    tui_redraw();
+}
+function uiCssFile(path: string): void { uiCss(readFile(path)); }
+
+// ---- events ----
+function uiOnClick(id: long, f: (long) => void): void {
+    uiClickIds.push(id);
+    uiClickFns.push(f);
+}
+function uiOnKey(f: (int) => void): void { uiKeyFns.push(f); }
+
+// ---- run loop ----
+function uiRun(): void {
+    if (uiRootId < 0L && uiKind.len() > 0L) { uiRootId = 0L; }
+    tui_run();
+}
+function uiQuit(): void { tui_quit(); }
+function uiRedraw(): void { tui_redraw(); }
+
+// ---- internals ----
+function uiHitNode(id: long, x: double, y: double): long {
+    if (x < uiX[id] || y < uiY[id] ||
+        x >= uiX[id] + uiW[id] || y >= uiY[id] + uiH[id]) {
+        return -1L;
+    }
+    let kids = uiChildren[id];
+    let i = kids.len() - 1L;                 // later siblings paint on top
+    while (i >= 0L) {
+        let r = uiHitNode(kids[i], x, y);
+        if (r >= 0L) { return r; }
+        i -= 1L;
+    }
+    return id;
+}
+
+function uiHitTest(): long {
+    if (uiRootId < 0L || uiMouseX < 0.0) { return -1L; }
+    return uiHitNode(uiRootId, uiMouseX, uiMouseY);
+}
+
+function uiPointInside(id: long): bool {     // :hover containment (ancestors too)
+    if (uiMouseX < 0.0) { return false; }
+    return uiMouseX >= uiX[id] && uiMouseY >= uiY[id] &&
+           uiMouseX < uiX[id] + uiW[id] && uiMouseY < uiY[id] + uiH[id];
+}
+
+function uiIsAncestorOrSelf(anc: long, node: long): bool {
+    let cur = node;
+    while (cur >= 0L) {
+        if (cur == anc) { return true; }
+        cur = uiParent[cur];
+    }
+    return false;
+}
+
+function uiFindHandler(id: long): long {     // nearest self-or-ancestor with onClick
+    let cur = id;
+    while (cur >= 0L) {
+        for (i in 0L..uiClickIds.len()) {
+            if (uiClickIds[i] == cur) { return i; }
+        }
+        cur = uiParent[cur];
+    }
+    return -1L;
+}
+
+function uiComputeStyles(): void {
+    for (w in 0L..uiKind.len()) {
+        uiStyle[w] = cssCompute(w, uiPointInside(w));
+    }
+}
+
+function uiEffectiveCursor(id: long): int {  // inherit cursor up the tree
+    let cur = id;
+    while (cur >= 0L) {
+        if (uiStyle[cur].cursor != 0) { return uiStyle[cur].cursor; }
+        cur = uiParent[cur];
+    }
+    return 0;
+}
+
+// ---- native shim callbacks ----
+@export
+function tuiRender(w: int, h: int): void {
+    tui_clear(1.0, 1.0, 1.0);
+    if (uiRootId < 0L) { return; }
+    uiComputeStyles();
+    uiLayoutRoot(w as double, h as double);
+    uiPaint(uiRootId);
+}
+
+@export
+function tuiMouseMove(x: double, y: double): void {
+    uiMouseX = x;
+    uiMouseY = y;
+    let h = uiHitTest();
+    if (h != uiHoverId) {
+        uiHoverId = h;
+        tui_redraw();
+    }
+    if (h >= 0L) { tui_set_cursor(uiEffectiveCursor(h)); }
+    else { tui_set_cursor(0); }
+}
+
+@export
+function tuiMouseDown(x: double, y: double): void {
+    uiMouseX = x;
+    uiMouseY = y;
+    uiPressedId = uiHitTest();
+}
+
+@export
+function tuiMouseUp(x: double, y: double): void {
+    uiMouseX = x;
+    uiMouseY = y;
+    let t = uiHitTest();
+    if (t >= 0L && uiPressedId >= 0L) {
+        let hi = uiFindHandler(t);
+        if (hi >= 0L) {
+            let target = uiClickIds[hi];
+            if (uiIsAncestorOrSelf(target, uiPressedId)) {
+                let f = uiClickFns[hi];
+                f(target);
+            }
+        }
+    }
+    uiPressedId = -1L;
+}
+
+@export
+function tuiResize(w: int, h: int): void {
+    tui_redraw();
+}
+
+@export
+function tuiKeyDown(key: int): void {
+    for (f in uiKeyFns) {
+        f(key);
+    }
+}

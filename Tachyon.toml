@@ -1,0 +1,13 @@
+[package]
+name = "tachyonui"
+version = "0.1.0"
+edition = "2026"
+repo = "git+https://github.com/vahan-gev/tachyon-tachyonui"
+
+[build]
+native-macos = ["native/tui_macos.m"]
+link-macos = ["-framework Cocoa"]
+native-linux = ["native/tui_x11.c"]
+link-linux = ["-lX11 -lcairo -lm"]
+native-windows = ["native/tui_win32.c"]
+link-windows = ["-lgdiplus -lgdi32 -luser32"]

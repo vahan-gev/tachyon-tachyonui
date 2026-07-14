@@ -1,0 +1,25 @@
+// TachyonUI — native shim FFI surface.
+// Implemented per platform in lib/tachyonui/native/ (Cocoa / Win32 / X11+cairo).
+
+// lifecycle
+extern function tui_create_window(title: string, w: int, h: int): void;
+extern function tui_run(): void;
+extern function tui_quit(): void;
+extern function tui_width(): int;
+extern function tui_height(): int;
+extern function tui_redraw(): void;
+
+// drawing — only valid while the native shim is inside tuiRender
+extern function tui_clear(r: double, g: double, b: double): void;
+extern function tui_rect(x: double, y: double, w: double, h: double, radius: double,
+                         r: double, g: double, b: double, a: double): void;
+extern function tui_border(x: double, y: double, w: double, h: double, radius: double,
+                           bw: double, r: double, g: double, b: double, a: double): void;
+extern function tui_text(s: string, x: double, y: double, size: double, bold: int,
+                         r: double, g: double, b: double, a: double): void;
+extern function tui_text_width(s: string, size: double, bold: int): double;
+extern function tui_text_height(size: double): double;
+extern function tui_image(path: string, x: double, y: double, w: double, h: double): void;
+extern function tui_image_width(path: string): double;
+extern function tui_image_height(path: string): double;
+extern function tui_set_cursor(kind: int): void;

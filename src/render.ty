@@ -1,0 +1,30 @@
+// TachyonUI — renderer: walks the widget tree and paints via the native shim.
+
+function uiPaint(id: long): void {
+    let st = uiStyle[id];
+    let x = uiX[id];
+    let y = uiY[id];
+    let w = uiW[id];
+    let h = uiH[id];
+
+    tui_rect(x, y, w, h, st.radius, st.bgR, st.bgG, st.bgB, st.bgA);
+    tui_border(x, y, w, h, st.radius, st.borderWidth, st.boR, st.boG, st.boB, st.boA);
+
+    let k = uiKind[id];
+    if (k == 1) {                            // label: text at the content origin
+        tui_text(uiText[id], x + st.padL, y + st.padT,
+                 st.fontSize, uiBoldInt(st), st.fgR, st.fgG, st.fgB, st.fgA);
+    } else if (k == 2) {                     // button: text centered
+        let tw = tui_text_width(uiText[id], st.fontSize, uiBoldInt(st));
+        let th = tui_text_height(st.fontSize);
+        tui_text(uiText[id], x + (w - tw) / 2.0, y + (h - th) / 2.0,
+                 st.fontSize, uiBoldInt(st), st.fgR, st.fgG, st.fgB, st.fgA);
+    } else if (k == 3) {                     // image: fills the content box
+        tui_image(uiText[id], x + st.padL, y + st.padT,
+                  w - st.padL - st.padR, h - st.padT - st.padB);
+    }
+
+    for (c in uiChildren[id]) {
+        uiPaint(c);
+    }
+}
