@@ -1,5 +1,34 @@
 # Changelog
 
+## 0.3.0
+
+**Pages & routing** (`src/route.ty`)
+- `uiPage(pattern, builder)` registers a screen; `uiNavigate(path)` matches the
+  path (literal segments + `:param` captures), runs the builder, and swaps the
+  root. `uiRouteParam(name)`, `uiCurrentRoute()`, `uiRouteActive(path)`.
+- `uiBack()` — history stack. `uiLink(text, path)` — a clickable that navigates.
+
+**Scrolling**
+- CSS `overflow` / `overflow-y` (`scroll` / `auto` / `hidden`). A scroll box
+  clips its content (new native `tui_clip`) and responds to the mouse wheel /
+  trackpad (new `tuiWheel` callback), with the offset clamped to the content.
+
+**Multi-line text**
+- `uiTextarea(placeholder)` — multi-line editing; Enter inserts a newline.
+- Labels and links **wrap** to their width; `text-align` (left/center/right),
+  `line-height`, and `white-space: nowrap` control the flow.
+
+**New elements**
+- `uiRadio(group)` (grouped; `uiSelectRadio`, `uiRadioSelected`),
+  `uiSlider()` (draggable 0..1; `uiSliderValue`/`uiSetSliderValue`),
+  `uiProgress()` (`uiSetProgress`), `uiLink(text, path)`,
+  `uiHeading(text, level)` (h1–h3), `uiDivider()`.
+
+**New CSS**
+- `position` (`relative` / `absolute` + `top`/`left`/`right`/`bottom`),
+  `z-index` (paint order), `box-shadow` (soft drop shadow), `display: none`,
+  `min-width`/`max-width`/`min-height`/`max-height`, `text-decoration: underline`.
+
 ## 0.2.0
 
 **New elements**

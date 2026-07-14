@@ -1,13 +1,14 @@
 // TachyonUI — renderer: walks the widget tree and paints via the native shim.
 // Paints from uiShown (the eased/animated style); geometry comes from layout.
-// A widget with a transform or opacity < 1 wraps its subtree in a native
-// save/restore so the effect applies to it and its children.
+// Handles transforms, opacity, box-shadow, overflow clipping, z-index order,
+// wrapped/aligned text, and every element kind.
 
 function uiHasTransform(st: TuiStyle): bool {
     return st.tx != 0.0 || st.ty != 0.0 || st.scale != 1.0 || st.rotate != 0.0;
 }
 
 function uiPaint(id: long, inheritedOpacity: double): void {
+    if (uiStyle[id].display == 0) { return; }         // display: none
     let st = uiShown[id];
     let x = uiX[id];
     let y = uiY[id];
@@ -15,68 +16,172 @@ function uiPaint(id: long, inheritedOpacity: double): void {
     let h = uiH[id];
 
     let op = inheritedOpacity * st.opacity;
-    if (op <= 0.0) { return; }                    // fully transparent subtree
+    if (op <= 0.0) { return; }
 
     let transformed = uiHasTransform(st);
     if (transformed) {
         let cx = x + w / 2.0;
         let cy = y + h / 2.0;
         tui_save();
-        tui_translate(st.tx, st.ty);              // translate() first
-        tui_translate(cx, cy);                    // then rotate/scale about center
+        tui_translate(st.tx, st.ty);
+        tui_translate(cx, cy);
         tui_rotate(st.rotate);
         tui_scale(st.scale, st.scale);
         tui_translate(-cx, -cy);
     }
 
-    // background + border (alpha scaled by the effective opacity)
+    if (st.shadow) { uiPaintShadow(st, x, y, w, h, op); }
+
     tui_rect(x, y, w, h, st.radius, st.bgR, st.bgG, st.bgB, st.bgA * op);
     tui_border(x, y, w, h, st.radius, st.borderWidth, st.boR, st.boG, st.boB, st.boA * op);
 
     let k = uiKind[id];
-    if (k == 1) {                                 // label
-        tui_text(uiText[id], x + st.padL, y + st.padT,
-                 st.fontSize, uiBoldInt(st), st.fgR, st.fgG, st.fgB, st.fgA * op);
-    } else if (k == 2) {                          // button: text centered
+    if (k == 1 || k == 9) {                           // label / link: wrapped text
+        uiPaintText(id, st, x, y, w, h, op);
+    } else if (k == 2) {                              // button: centered single line
         let tw = tui_text_width(uiText[id], st.fontSize, uiBoldInt(st));
         let th = tui_text_height(st.fontSize);
         tui_text(uiText[id], x + (w - tw) / 2.0, y + (h - th) / 2.0,
                  st.fontSize, uiBoldInt(st), st.fgR, st.fgG, st.fgB, st.fgA * op);
-    } else if (k == 3) {                          // image: fills the content box
+    } else if (k == 3) {                              // image
         tui_image(uiText[id], x + st.padL, y + st.padT,
                   w - st.padL - st.padR, h - st.padT - st.padB);
-    } else if (k == 4) {                          // input: value or placeholder + caret
-        uiPaintInput(id, st, x, y, w, h, op);
-    } else if (k == 5) {                          // checkbox: inner mark when set
+    } else if (k == 4 || k == 6) {                    // input / textarea
+        uiPaintField(id, st, x, y, w, h, op, k == 6);
+    } else if (k == 5) {                              // checkbox
         if (uiChecked[id]) {
-            let inset = 4.0;
-            tui_rect(x + inset, y + inset, w - inset * 2.0, h - inset * 2.0,
-                     2.0, st.fgR, st.fgG, st.fgB, op);
+            let ins = 4.0;
+            tui_rect(x + ins, y + ins, w - ins * 2.0, h - ins * 2.0, 2.0,
+                     st.fgR, st.fgG, st.fgB, op);
         }
+    } else if (k == 7) {                              // radio
+        if (uiChecked[id]) {
+            let ins = 4.0;
+            tui_rect(x + ins, y + ins, w - ins * 2.0, h - ins * 2.0, 999.0,
+                     st.fgR, st.fgG, st.fgB, op);
+        }
+    } else if (k == 8) {                              // slider: track + thumb
+        uiPaintSlider(id, st, x, y, w, h, op);
+    } else if (k == 10) {                             // progress: track + fill
+        let fw = w * uiClamp01(uiVal[id]);
+        tui_rect(x, y, fw, h, st.radius, 0.15, 0.39, 0.92, op);
     }
 
-    for (c in uiChildren[id]) {
+    // children — clipped for scroll/hidden, painted in z-index order
+    let clip = st.overflow != 0;
+    if (clip) {
+        tui_save();
+        tui_clip(x + st.padL, y + st.padT, w - st.padL - st.padR, h - st.padT - st.padB);
+    }
+    for (c in uiChildrenZ(id)) {
         uiPaint(c, op);
     }
+    if (clip) { tui_restore(); }
 
     if (transformed) { tui_restore(); }
 }
 
-function uiPaintInput(id: long, st: TuiStyle, x: double, y: double,
-                      w: double, h: double, op: double): void {
-    let tx = x + st.padL;
-    let th = tui_text_height(st.fontSize);
-    let ty = y + (h - th) / 2.0;                  // vertically centered text
+// children ordered by z-index (stable insertion sort; ties keep tree order)
+function uiChildrenZ(id: long): Vec<long> {
+    let ks: Vec<long> = Vec();
+    for (c in uiChildren[id]) { ks.push(c); }
+    let i = 1L;
+    while (i < ks.len()) {
+        let key = ks[i];
+        let kz = uiStyle[key].zIndex;
+        let j = i - 1L;
+        while (j >= 0L && uiStyle[ks[j]].zIndex > kz) {
+            ks[j + 1L] = ks[j];
+            j -= 1L;
+        }
+        ks[j + 1L] = key;
+        i += 1L;
+    }
+    return ks;
+}
+
+// a cheap soft drop shadow: a few expanding low-alpha rounded rects behind
+function uiPaintShadow(st: TuiStyle, x: double, y: double, w: double, h: double,
+                       op: double): void {
+    let layers = 4L;
+    for (i in 0L..layers) {
+        let g = (i as double) + 1.0;
+        let spread = st.shadowBlur * g / (layers as double);
+        let a = st.shadowA * op / (layers as double);
+        tui_rect(x - spread, y - spread + st.shadowY, w + spread * 2.0, h + spread * 2.0,
+                 st.radius + spread, 0.0, 0.0, 0.0, a);
+    }
+}
+
+// wrapped, aligned text for labels and links (underline when set)
+function uiPaintText(id: long, st: TuiStyle, x: double, y: double,
+                     w: double, h: double, op: double): void {
+    let cx = x + st.padL;
+    let cw = w - st.padL - st.padR;
+    let lh = uiEffLineHeight(st);
+    let bold = uiBoldInt(st);
+    let lines = uiWrapLines(uiTextOf(id), cw, st.fontSize, bold, st.nowrap);
+    let ty = y + st.padT;
+    for (line in lines) {
+        let lw = tui_text_width(line, st.fontSize, bold);
+        let lx = cx;
+        if (st.textAlign == 1) { lx = cx + (cw - lw) / 2.0; }
+        else if (st.textAlign == 2) { lx = cx + cw - lw; }
+        tui_text(line, lx, ty, st.fontSize, bold, st.fgR, st.fgG, st.fgB, st.fgA * op);
+        if (st.underline) {
+            tui_rect(lx, ty + lh - 2.0, lw, 1.0, 0.0, st.fgR, st.fgG, st.fgB, st.fgA * op);
+        }
+        ty += lh;
+    }
+}
+
+// input (single line) or textarea (wrapped, multi-line) with a caret
+function uiPaintField(id: long, st: TuiStyle, x: double, y: double,
+                      w: double, h: double, op: double, isArea: bool): void {
+    let cx = x + st.padL;
+    let cw = w - st.padL - st.padR;
+    let lh = uiEffLineHeight(st);
+    let bold = uiBoldInt(st);
     let val = uiText[id];
-    if (val.len() == 0L) {                        // placeholder in muted gray
-        tui_text(uiPlaceholder[id], tx, ty, st.fontSize, 0, 0.6, 0.62, 0.66, op);
+    let empty = val.len() == 0L;
+    let shownText = val;
+    if (empty) { shownText = uiPlaceholder[id]; }
+
+    if (isArea) {
+        let lines = uiWrapLines(shownText, cw, st.fontSize, bold, false);
+        let ty = y + st.padT;
+        for (line in lines) {
+            if (empty) { tui_text(line, cx, ty, st.fontSize, 0, 0.6, 0.62, 0.66, op); }
+            else { tui_text(line, cx, ty, st.fontSize, bold, st.fgR, st.fgG, st.fgB, st.fgA * op); }
+            ty += lh;
+        }
+        if (uiFocusId == id) {                        // caret at end of the text
+            let last = "";
+            if (lines.len() > 0L) { last = lines[lines.len() - 1L]; }
+            let cxp = cx + tui_text_width(last, st.fontSize, bold);
+            let cyp = y + st.padT + lh * ((lines.len() - 1L) as double);
+            tui_rect(cxp, cyp, 1.5, lh, 0.0, st.fgR, st.fgG, st.fgB, op);
+        }
     } else {
-        tui_text(val, tx, ty, st.fontSize, uiBoldInt(st),
-                 st.fgR, st.fgG, st.fgB, st.fgA * op);
+        let ty = y + (h - lh) / 2.0;
+        if (empty) { tui_text(shownText, cx, ty, st.fontSize, 0, 0.6, 0.62, 0.66, op); }
+        else { tui_text(val, cx, ty, st.fontSize, bold, st.fgR, st.fgG, st.fgB, st.fgA * op); }
+        if (uiFocusId == id) {
+            let head = uiStrHead(val, uiCaret[id]);
+            let cxp = cx + tui_text_width(head, st.fontSize, bold);
+            tui_rect(cxp, ty, 1.5, lh, 0.0, st.fgR, st.fgG, st.fgB, op);
+        }
     }
-    if (uiFocusId == id) {                        // caret after the first `caret` chars
-        let head = uiStrHead(val, uiCaret[id]);
-        let cx = tx + tui_text_width(head, st.fontSize, uiBoldInt(st));
-        tui_rect(cx, ty, 1.5, th, 0.0, st.fgR, st.fgG, st.fgB, op);
-    }
+}
+
+// slider: the track is the element background; draw a filled portion + a thumb
+function uiPaintSlider(id: long, st: TuiStyle, x: double, y: double,
+                       w: double, h: double, op: double): void {
+    let v = uiClamp01(uiVal[id]);
+    tui_rect(x, y, w * v, h, st.radius, 0.15, 0.39, 0.92, op);   // filled track
+    let r = 9.0;
+    let tx = x + w * v - r;
+    let ty = y + h / 2.0 - r;
+    tui_rect(tx, ty, r * 2.0, r * 2.0, 999.0, 1.0, 1.0, 1.0, op);       // thumb
+    tui_border(tx, ty, r * 2.0, r * 2.0, 999.0, 1.0, 0.15, 0.39, 0.92, op);
 }

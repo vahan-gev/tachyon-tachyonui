@@ -33,3 +33,5 @@ extern function tui_restore(): void;
 extern function tui_translate(dx: double, dy: double): void;
 extern function tui_scale(sx: double, sy: double): void;
 extern function tui_rotate(deg: double): void;
+// clip the current save()/restore() scope to a rectangle (for §scroll/overflow)
+extern function tui_clip(x: double, y: double, w: double, h: double): void;

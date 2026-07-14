@@ -9,6 +9,7 @@
 #ifdef _WIN32
 #define WIN32_LEAN_AND_MEAN
 #include <windows.h>
+#include <windowsx.h>
 #include <stdint.h>
 #include <stdlib.h>
 #include <string.h>
@@ -65,6 +66,7 @@ GpStatus WINAPI GdipRestoreGraphics(GpGraphics* g, GraphicsState state);
 GpStatus WINAPI GdipTranslateWorldTransform(GpGraphics* g, float dx, float dy, int order);
 GpStatus WINAPI GdipScaleWorldTransform(GpGraphics* g, float sx, float sy, int order);
 GpStatus WINAPI GdipRotateWorldTransform(GpGraphics* g, float angle, int order);
+GpStatus WINAPI GdipSetClipRect(GpGraphics* g, float x, float y, float w, float h, int mode);
 
 extern void tuiRender(int32_t w, int32_t h);
 extern void tuiMouseMove(double x, double y);
@@ -73,6 +75,7 @@ extern void tuiMouseUp(double x, double y);
 extern void tuiResize(int32_t w, int32_t h);
 extern void tuiKeyDown(int32_t keycode);
 extern void tuiTextInput(int32_t codepoint);
+extern void tuiWheel(double dx, double dy);
 
 #define TUI_FRAME_TIMER 0x7ACF
 #define TUI_AUTOQUIT_TIMER 0x7ACE
@@ -161,6 +164,14 @@ static LRESULT CALLBACK tui_wndproc(HWND h, UINT msg, WPARAM wp, LPARAM lp) {
         case WM_CHAR:
             if (wp >= 0x20 && wp != 0x7F) tuiTextInput((int32_t)wp);
             return 0;
+        case WM_MOUSEWHEEL: {
+            POINT pt = { GET_X_LPARAM(lp), GET_Y_LPARAM(lp) };
+            ScreenToClient(h, &pt);
+            tuiMouseMove((double)pt.x, (double)pt.y);
+            int delta = GET_WHEEL_DELTA_WPARAM(wp);      /* 120 per notch */
+            tuiWheel(0.0, -(double)delta / 120.0 * 40.0);
+            return 0;
+        }
         case WM_TIMER:
             if (wp == TUI_FRAME_TIMER) {
                 KillTimer(h, TUI_FRAME_TIMER);
@@ -237,6 +248,10 @@ void tui_scale(double sx, double sy) {
 }
 void tui_rotate(double deg) {
     if (g_gfx) GdipRotateWorldTransform(g_gfx, (float)deg, 0);
+}
+void tui_clip(double x, double y, double w, double h) {
+    /* intersect with the current clip so nested scroll regions compose */
+    if (g_gfx) GdipSetClipRect(g_gfx, (float)x, (float)y, (float)w, (float)h, 1 /*intersect*/);
 }
 
 /* ---------- drawing ---------- */

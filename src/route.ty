@@ -1,0 +1,95 @@
+// TachyonUI — pages & routing.
+//
+// Register pages by path pattern; navigate between them. A page's builder runs
+// when you navigate to it and returns the root widget for that screen.
+//
+//   uiPage("/", () => homeScreen());
+//   uiPage("/users/:id", () => userScreen());   // :id captured
+//   uiNavigate("/users/42");
+//   ... uiRouteParam("id") == "42" ...
+//   uiLink("back home", "/");                    // a clickable that navigates
+//
+// Patterns are literal segments plus `:name` captures (like tyweb's router).
+// Navigation keeps a history stack, so uiBack() returns to the previous page.
+
+struct TuiRoute {
+    pattern: string;
+    builder: () => long;
+}
+
+static mut uiRoutes: Vec<TuiRoute> = Vec();
+static mut uiHistory: Vec<string> = Vec();
+static mut uiCurRoute: string = "";
+static mut uiRouteParams: HashMap<string, string> = HashMap();
+
+/// Register a page. `builder` is called each time the page is navigated to and
+/// returns the root widget id for that screen.
+function uiPage(pattern: string, builder: () => long): void {
+    uiRoutes.push(TuiRoute(pattern, builder));
+}
+
+/// Navigate to `path`: match it against the registered pages, run the matching
+/// page's builder, and make its widget the root. Pushes onto the history stack.
+/// A path that matches nothing is ignored (the current page stays).
+function uiNavigate(path: string): void {
+    for (r in uiRoutes) {
+        let params: HashMap<string, string> = HashMap();
+        if (uiRouteMatch(r.pattern, path, &mut params)) {
+            uiRouteParams = params;
+            uiCurRoute = path;
+            uiHistory.push(path);
+            let root = r.builder();
+            uiSetRoot(root);
+            tui_redraw();
+            return;
+        }
+    }
+}
+
+/// The current path, or "" before the first navigation.
+function uiCurrentRoute(): string { return uiCurRoute; }
+
+/// A captured `:name` segment of the current route ("" if absent).
+function uiRouteParam(name: string): string { return uiRouteParams.getOr(name, ""); }
+
+/// Go back to the previous page in history (no-op at the first page).
+function uiBack(): void {
+    if (uiHistory.len() >= 2L) {
+        uiHistory.pop();                 // drop the current page
+        let prev = uiHistory.pop();      // uiNavigate re-pushes it
+        uiNavigate(prev);
+    }
+}
+
+/// True when `path` matches the current route's pattern — handy for marking an
+/// active nav link.
+function uiRouteActive(path: string): bool { return uiCurRoute == path; }
+
+// match `/users/:id` against `/users/42`, filling captures. Query strings are
+// dropped before matching.
+function uiRouteMatch(pattern: string, path0: string,
+                      out: &mut HashMap<string, string>): bool {
+    let path = path0;
+    let q = path.indexOf("?");
+    if (q >= 0L) { path = path.sub(0L, q); }
+    let ps = uiPathSegments(pattern);
+    let xs = uiPathSegments(path);
+    if (ps.len() != xs.len()) { return false; }
+    for (i in 0L..ps.len()) {
+        let seg = ps[i];
+        if (seg.startsWith(":")) {
+            out.insert(seg.sub(1L, seg.len()), xs[i].clone());
+        } else if (seg != xs[i]) {
+            return false;
+        }
+    }
+    return true;
+}
+
+function uiPathSegments(p: string): Vec<string> {
+    let out: Vec<string> = Vec();
+    for (seg in p.split("/")) {
+        if (seg.len() > 0L) { out.push(seg); }
+    }
+    return out;
+}

@@ -1,67 +1,138 @@
-// TachyonUI — layout engine (flexbox-lite).
+// TachyonUI — layout engine (flexbox-lite + wrapping, scroll, positioning).
 //
 // Border-box sizing. Boxes lay children out along flex-direction with
-// gap / justify-content / align-items. width/height accept px, %, auto.
-// Leaves (label/button/img) size to content when auto; auto-sized child
-// boxes stretch on the cross axis when align-items is stretch (the default).
+// gap / justify-content / align-items. width/height accept px, %, auto, and are
+// clamped by min/max-width/height. `display: none` removes an element; `position:
+// absolute` takes it out of flow and places it by top/left/right/bottom; a box
+// with `overflow: scroll` clips and scrolls its content.
 
 function uiBoldInt(st: TuiStyle): int {
     return if (st.bold) 1 else 0;
 }
 
+function uiEffLineHeight(st: TuiStyle): double {
+    if (st.lineHeight > 0.0) { return st.lineHeight; }
+    return tui_text_height(st.fontSize);
+}
+
+function uiIsText(k: int): bool {           // renders text: label, button, input, textarea, link
+    return k == 1 || k == 2 || k == 4 || k == 6 || k == 9;
+}
+function uiWraps(k: int): bool {            // wraps to width: label, textarea, link
+    return k == 1 || k == 6 || k == 9;
+}
+
+function uiTextOf(id: long): string {       // the text a widget measures/paints
+    let k = uiKind[id];
+    if ((k == 4 || k == 6) && uiText[id].len() == 0L) { return uiPlaceholder[id]; }
+    return uiText[id];
+}
+
+// break `text` into display lines that fit `maxW`. Honors explicit '\n'. With
+// nowrap or maxW <= 0, only splits on newlines.
+function uiWrapLines(text: string, maxW: double, fontSize: double,
+                     bold: int, nowrap: bool): Vec<string> {
+    let out: Vec<string> = Vec();
+    for (para in text.split("\n")) {
+        if (nowrap || maxW <= 0.0) { out.push(para); continue; }
+        let line = "";
+        for (word in para.split(" ")) {
+            let trial = "";
+            if (line == "") { trial = word; }
+            else { trial = line + " " + word; }
+            if (line == "" || tui_text_width(trial, fontSize, bold) <= maxW) {
+                line = trial;
+            } else {
+                out.push(line);
+                line = word;
+            }
+        }
+        out.push(line);
+    }
+    if (out.len() == 0L) { out.push(""); }
+    return out;
+}
+
+function uiClampW(st: TuiStyle, w: double): double {
+    let out = w;
+    if (st.minW >= 0.0 && out < st.minW) { out = st.minW; }
+    if (st.maxW >= 0.0 && out > st.maxW) { out = st.maxW; }
+    return out;
+}
+function uiClampH(st: TuiStyle, h: double): double {
+    let out = h;
+    if (st.minH >= 0.0 && out < st.minH) { out = st.minH; }
+    if (st.maxH >= 0.0 && out > st.maxH) { out = st.maxH; }
+    return out;
+}
+
 function uiMeasureW(id: long): double {
     let st = uiStyle[id];
-    if (!st.widthPct && st.width >= 0.0) { return st.width; }
+    if (st.display == 0) { return 0.0; }
+    if (!st.widthPct && st.width >= 0.0) { return uiClampW(st, st.width); }
     let k = uiKind[id];
-    if (k == 1 || k == 2 || k == 4) {
-        let s = uiText[id];
-        if (k == 4 && s.len() == 0L) { s = uiPlaceholder[id]; }
-        return tui_text_width(s, st.fontSize, uiBoldInt(st)) + st.padL + st.padR;
+    if (uiIsText(k)) {
+        return uiClampW(st, tui_text_width(uiTextOf(id), st.fontSize, uiBoldInt(st))
+                             + st.padL + st.padR);
     }
-    if (k == 3) {
-        return tui_image_width(uiText[id]) + st.padL + st.padR;
-    }
-    if (k == 5) { return 16.0 + st.padL + st.padR; }
+    if (k == 3) { return uiClampW(st, tui_image_width(uiText[id]) + st.padL + st.padR); }
+    if (k == 5 || k == 7) { return uiClampW(st, 16.0 + st.padL + st.padR); }   // checkbox/radio
+    if (k == 8 || k == 10) { return uiClampW(st, 120.0 + st.padL + st.padR); } // slider/progress
     let total = 0.0;
     let maxc = 0.0;
-    let n = uiChildren[id].len();
+    let n = 0L;
     for (c in uiChildren[id]) {
+        if (uiStyle[c].display == 0 || uiStyle[c].position == 2) { continue; }
         let cw = uiMeasureW(c) + uiStyle[c].marL + uiStyle[c].marR;
         total += cw;
         if (cw > maxc) { maxc = cw; }
+        n += 1L;
     }
     let inner = maxc;
     if (st.row) {
         inner = total;
         if (n > 1L) { inner += st.gap * ((n - 1L) as double); }
     }
-    return inner + st.padL + st.padR;
+    return uiClampW(st, inner + st.padL + st.padR);
 }
 
-function uiMeasureH(id: long): double {
+// height when the element's content width is `cw` (-1 = use its own/auto width)
+function uiMeasureHAt(id: long, cw: double): double {
     let st = uiStyle[id];
-    if (!st.heightPct && st.height >= 0.0) { return st.height; }
+    if (st.display == 0) { return 0.0; }
+    if (!st.heightPct && st.height >= 0.0) { return uiClampH(st, st.height); }
     let k = uiKind[id];
-    if (k == 1 || k == 2 || k == 4) {
-        return tui_text_height(st.fontSize) + st.padT + st.padB;
+    if (uiIsText(k)) {
+        let lh = uiEffLineHeight(st);
+        let nlines = 1L;
+        if (uiWraps(k)) {
+            let w = cw;
+            if (w < 0.0 && !st.widthPct && st.width >= 0.0) { w = st.width - st.padL - st.padR; }
+            nlines = uiWrapLines(uiTextOf(id), w, st.fontSize, uiBoldInt(st), st.nowrap).len();
+        }
+        return uiClampH(st, lh * (nlines as double) + st.padT + st.padB);
     }
-    if (k == 3) {
-        return tui_image_height(uiText[id]) + st.padT + st.padB;
-    }
-    if (k == 5) { return 16.0 + st.padT + st.padB; }
+    if (k == 3) { return uiClampH(st, tui_image_height(uiText[id]) + st.padT + st.padB); }
+    if (k == 5 || k == 7) { return uiClampH(st, 16.0 + st.padT + st.padB); }
+    if (k == 8) { return uiClampH(st, 6.0 + st.padT + st.padB); }
+    if (k == 10) { return uiClampH(st, 8.0 + st.padT + st.padB); }
     let total = 0.0;
     let maxc = 0.0;
-    let n = uiChildren[id].len();
+    let n = 0L;
     for (c in uiChildren[id]) {
-        let ch = uiMeasureH(c) + uiStyle[c].marT + uiStyle[c].marB;
+        if (uiStyle[c].display == 0 || uiStyle[c].position == 2) { continue; }
+        let ch = uiMeasureHAt(c, -1.0) + uiStyle[c].marT + uiStyle[c].marB;
         total += ch;
         if (ch > maxc) { maxc = ch; }
+        n += 1L;
     }
     let inner = total;
     if (st.row) { inner = maxc; }
     else if (n > 1L) { inner += st.gap * ((n - 1L) as double); }
-    return inner + st.padT + st.padB;
+    return uiClampH(st, inner + st.padT + st.padB);
 }
+
+function uiMeasureH(id: long): double { return uiMeasureHAt(id, -1.0); }
 
 function uiLayoutRoot(winW: double, winH: double): void {
     let st = uiStyle[uiRootId];
@@ -74,41 +145,55 @@ function uiLayoutRoot(winW: double, winH: double): void {
     uiArrange(uiRootId, st.marL, st.marT, w, h);
 }
 
+// resolve one child's width given the parent's content width `cw`
+function uiChildW(c: long, st: TuiStyle, cw: double): double {
+    let cs = uiStyle[c];
+    let out = 0.0;
+    if (cs.widthPct) { out = cw * cs.width / 100.0; }
+    else if (cs.width >= 0.0) { out = cs.width; }
+    else if (!st.row && st.align == 3 && (uiKind[c] == 0 || uiWraps(uiKind[c]))) {
+        out = cw - cs.marL - cs.marR;              // stretch cross axis (column)
+    } else { out = uiMeasureW(c); }
+    return uiClampW(cs, out);
+}
+
 function uiArrange(id: long, x: double, y: double, w: double, h: double): void {
     uiX[id] = x;
     uiY[id] = y;
     uiW[id] = w;
     uiH[id] = h;
     let st = uiStyle[id];
-    let kids = uiChildren[id];
-    let n = kids.len();
-    if (n == 0L) { return; }
-
+    let allKids = uiChildren[id];
     let cx = x + st.padL;
     let cy = y + st.padT;
     let cw = w - st.padL - st.padR;
     let chh = h - st.padT - st.padB;
 
-    // resolve child sizes
+    // partition: in-flow (rendered, not absolute) vs absolutely-positioned
+    let kids: Vec<long> = Vec();
+    let abs: Vec<long> = Vec();
+    for (c in allKids) {
+        let cs = uiStyle[c];
+        if (cs.display == 0) { uiX[c] = x; uiY[c] = y; uiW[c] = 0.0; uiH[c] = 0.0; continue; }
+        if (cs.position == 2) { abs.push(c); } else { kids.push(c); }
+    }
+
+    let n = kids.len();
+    // resolve in-flow child sizes
     let ws: Vec<double> = Vec();
     let hs: Vec<double> = Vec();
     let totalMain = 0.0;
     for (c in kids) {
         let cs = uiStyle[c];
-        let cwid = 0.0;
-        if (cs.widthPct) { cwid = cw * cs.width / 100.0; }
-        else if (cs.width >= 0.0) { cwid = cs.width; }
-        else if (!st.row && st.align == 3 && uiKind[c] == 0) {
-            cwid = cw - cs.marL - cs.marR;         // stretch cross axis (column)
-        }
-        else { cwid = uiMeasureW(c); }
+        let cwid = uiChildW(c, st, cw);
         let chei = 0.0;
         if (cs.heightPct) { chei = chh * cs.height / 100.0; }
         else if (cs.height >= 0.0) { chei = cs.height; }
         else if (st.row && st.align == 3 && uiKind[c] == 0) {
             chei = chh - cs.marT - cs.marB;        // stretch cross axis (row)
         }
-        else { chei = uiMeasureH(c); }
+        else { chei = uiMeasureHAt(c, cwid - cs.padL - cs.padR); }   // wrap to resolved width
+        chei = uiClampH(cs, chei);
         ws.push(cwid);
         hs.push(chei);
         if (st.row) { totalMain += cwid + cs.marL + cs.marR; }
@@ -117,16 +202,29 @@ function uiArrange(id: long, x: double, y: double, w: double, h: double): void {
 
     let gaps = 0.0;
     if (n > 1L) { gaps = st.gap * ((n - 1L) as double); }
-    let mainAvail = chh;
-    if (st.row) { mainAvail = cw; }
-    let leftover = mainAvail - totalMain - gaps;
+    let contentMain = totalMain + gaps;
+    let mainAvail = if (st.row) cw else chh;
 
+    // scroll container: content taller than the box scrolls; record for the wheel
+    let scroll = 0.0;
+    if (!st.row && st.overflow == 2) {
+        uiContentH[id] = contentMain + st.padT + st.padB;
+        let maxScroll = contentMain - chh;
+        if (maxScroll < 0.0) { maxScroll = 0.0; }
+        if (uiScrollY[id] > maxScroll) { uiScrollY[id] = maxScroll; }
+        if (uiScrollY[id] < 0.0) { uiScrollY[id] = 0.0; }
+        scroll = uiScrollY[id];
+    }
+
+    let leftover = mainAvail - contentMain;
     let pos = 0.0;
     let extra = 0.0;
-    if (st.justify == 1) { pos = leftover / 2.0; }
-    else if (st.justify == 2) { pos = leftover; }
-    else if (st.justify == 3 && n > 1L && leftover > 0.0) {
-        extra = leftover / ((n - 1L) as double);
+    if (st.overflow != 2) {                        // justify only when not scrolling
+        if (st.justify == 1) { pos = leftover / 2.0; }
+        else if (st.justify == 2) { pos = leftover; }
+        else if (st.justify == 3 && n > 1L && leftover > 0.0) {
+            extra = leftover / ((n - 1L) as double);
+        }
     }
 
     for (i in 0L..n) {
@@ -137,15 +235,42 @@ function uiArrange(id: long, x: double, y: double, w: double, h: double): void {
             let chY = cy + cs.marT;
             if (st.align == 1) { chY = cy + (chh - hs[i]) / 2.0; }
             else if (st.align == 2) { chY = cy + chh - hs[i] - cs.marB; }
-            uiArrange(c, chX, chY, ws[i], hs[i]);
+            uiArrange(c, chX, chY + relY(cs), ws[i], hs[i]);
             pos += cs.marL + ws[i] + cs.marR + st.gap + extra;
         } else {
             let chX = cx + cs.marL;
-            let chY = cy + pos + cs.marT;
+            let chY = cy + pos + cs.marT - scroll;
             if (st.align == 1) { chX = cx + (cw - ws[i]) / 2.0; }
             else if (st.align == 2) { chX = cx + cw - ws[i] - cs.marR; }
-            uiArrange(c, chX, chY, ws[i], hs[i]);
+            uiArrange(c, chX + relX(cs), chY, ws[i], hs[i]);
             pos += cs.marT + hs[i] + cs.marB + st.gap + extra;
         }
     }
+
+    // absolutely-positioned children: placed within this box's content area
+    for (c in abs) {
+        let cs = uiStyle[c];
+        let awid = uiChildW(c, st, cw);
+        let ahei = if (cs.height >= 0.0) cs.height else uiMeasureHAt(c, awid - cs.padL - cs.padR);
+        ahei = uiClampH(cs, ahei);
+        let ax = cx;
+        if (cs.posL > -99999.0) { ax = cx + cs.posL; }
+        else if (cs.posR > -99999.0) { ax = cx + cw - awid - cs.posR; }
+        let ay = cy;
+        if (cs.posT > -99999.0) { ay = cy + cs.posT; }
+        else if (cs.posB > -99999.0) { ay = cy + chh - ahei - cs.posB; }
+        uiArrange(c, ax, ay, awid, ahei);
+    }
+}
+
+// position: relative nudges by top/left without affecting siblings
+function relX(cs: TuiStyle): double {
+    if (cs.position == 1 && cs.posL > -99999.0) { return cs.posL; }
+    if (cs.position == 1 && cs.posR > -99999.0) { return -cs.posR; }
+    return 0.0;
+}
+function relY(cs: TuiStyle): double {
+    if (cs.position == 1 && cs.posT > -99999.0) { return cs.posT; }
+    if (cs.position == 1 && cs.posB > -99999.0) { return -cs.posB; }
+    return 0.0;
 }

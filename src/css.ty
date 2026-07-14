@@ -36,6 +36,21 @@ struct TuiStyle {
     scale: double = 1.0;
     rotate: double = 0.0;   // degrees
     transition: double = 0.0;   // ms; > 0 eases visual props toward this style
+    // §v0.3 — text, overflow, positioning, sizing bounds, effects
+    textAlign: int = 0;     // 0 left, 1 center, 2 right
+    lineHeight: double = 0.0;   // 0 = auto (from font)
+    nowrap: bool = false;   // white-space: nowrap (default: wrap)
+    overflow: int = 0;      // 0 visible, 1 hidden, 2 scroll/auto
+    display: int = 1;       // 1 shown, 0 none
+    position: int = 0;      // 0 static, 1 relative, 2 absolute
+    posL: double = -100000.0; posR: double = -100000.0;   // -100000 = unset
+    posT: double = -100000.0; posB: double = -100000.0;
+    zIndex: int = 0;
+    minW: double = -1.0; maxW: double = -1.0;
+    minH: double = -1.0; maxH: double = -1.0;
+    underline: bool = false;
+    shadow: bool = false;   // box-shadow (a soft offset drop shadow)
+    shadowY: double = 4.0; shadowBlur: double = 12.0; shadowA: double = 0.18;
 }
 
 struct TuiRule {
@@ -414,6 +429,51 @@ function cssApplyProp(st0: TuiStyle, p: string, v: string): TuiStyle {
         "transform" => { st = cssApplyTransform(st, v); }
         "transition" => { st.transition = cssDuration(v); }
         "transition-duration" => { st.transition = cssDuration(v); }
+        "text-align" => {
+            match (v.toLower()) {
+                "center" => { st.textAlign = 1; }
+                "right"  => { st.textAlign = 2; }
+                _        => { st.textAlign = 0; }
+            }
+        }
+        "line-height" => { st.lineHeight = cssLen(v); }
+        "white-space" => { st.nowrap = v.toLower() == "nowrap"; }
+        "overflow" | "overflow-y" => {
+            match (v.toLower()) {
+                "hidden"          => { st.overflow = 1; }
+                "scroll" | "auto" => { st.overflow = 2; }
+                _                 => { st.overflow = 0; }
+            }
+        }
+        "display" => { st.display = if (v.toLower() == "none") 0 else 1; }
+        "position" => {
+            match (v.toLower()) {
+                "relative" => { st.position = 1; }
+                "absolute" => { st.position = 2; }
+                "fixed"    => { st.position = 2; }   // treated as absolute
+                _          => { st.position = 0; }
+            }
+        }
+        "left"   => { st.posL = cssLen(v); }
+        "right"  => { st.posR = cssLen(v); }
+        "top"    => { st.posT = cssLen(v); }
+        "bottom" => { st.posB = cssLen(v); }
+        "z-index" => { st.zIndex = parseIntOr(v.trim(), 0) as int; }
+        "min-width"  => { st.minW = cssLen(v); }
+        "max-width"  => { st.maxW = cssLen(v); }
+        "min-height" => { st.minH = cssLen(v); }
+        "max-height" => { st.maxH = cssLen(v); }
+        "text-decoration" => { st.underline = v.toLower().contains("underline"); }
+        "box-shadow" => {
+            let lv = v.toLower();
+            if (lv == "none") { st.shadow = false; }
+            else {
+                st.shadow = true;
+                let nums = cssWords(lv);
+                if (nums.len() >= 2L) { st.shadowY = cssLen(nums[1]); }
+                if (nums.len() >= 3L) { st.shadowBlur = cssLen(nums[2]); }
+            }
+        }
         _ => { }     // unknown properties are ignored, like a browser
     }
     return st;
@@ -427,7 +487,12 @@ function cssKindTag(kind: int): string {
     if (kind == 2) { return "button"; }
     if (kind == 3) { return "img"; }
     if (kind == 4) { return "input"; }
-    return "checkbox";
+    if (kind == 5) { return "checkbox"; }
+    if (kind == 6) { return "textarea"; }
+    if (kind == 7) { return "radio"; }
+    if (kind == 8) { return "slider"; }
+    if (kind == 9) { return "link"; }
+    return "progress";
 }
 
 function cssRuleMatches(r: &TuiRule, w: long, hovered: bool): bool {
@@ -481,5 +546,23 @@ function cssLoadDefaults(): void {
              + "input:hover { border-color: #a7adba; } "
              + "checkbox { background-color: #ffffff; border-width: 1px; "
              + "border-color: #b0b5c0; border-radius: 4px; width: 18px; "
-             + "height: 18px; cursor: pointer; }");
+             + "height: 18px; cursor: pointer; } "
+             // --- v0.3 elements ---
+             + "textarea { background-color: #ffffff; color: #16181d; "
+             + "padding: 8px 10px; border-radius: 7px; border-width: 1px; "
+             + "border-color: #c8ccd4; cursor: text; width: 260px; height: 96px; } "
+             + "textarea:hover { border-color: #a7adba; } "
+             + "radio { background-color: #ffffff; border-width: 1px; "
+             + "border-color: #b0b5c0; border-radius: 999px; width: 18px; "
+             + "height: 18px; cursor: pointer; } "
+             + "slider { background-color: #d9dce3; border-radius: 999px; "
+             + "width: 180px; height: 6px; cursor: pointer; } "
+             + "progress { background-color: #e5e7eb; border-radius: 999px; "
+             + "width: 200px; height: 8px; } "
+             + "link { color: #2563eb; cursor: pointer; text-decoration: underline; } "
+             + "link:hover { color: #1d4ed8; } "
+             + "label.h1 { font-size: 30px; font-weight: bold; } "
+             + "label.h2 { font-size: 23px; font-weight: bold; } "
+             + "label.h3 { font-size: 18px; font-weight: bold; } "
+             + "box.hr { height: 1px; width: 100%; background-color: #e2e5ea; }");
 }

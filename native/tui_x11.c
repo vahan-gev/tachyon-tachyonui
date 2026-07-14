@@ -29,6 +29,7 @@ extern void tuiMouseUp(double x, double y);
 extern void tuiResize(int32_t w, int32_t h);
 extern void tuiKeyDown(int32_t keycode);
 extern void tuiTextInput(int32_t codepoint);
+extern void tuiWheel(double dx, double dy);
 
 static Display* g_dpy = 0;
 static Window g_win = 0;
@@ -76,6 +77,9 @@ void tui_restore(void) { if (g_cr) cairo_restore(g_cr); }
 void tui_translate(double dx, double dy) { if (g_cr) cairo_translate(g_cr, dx, dy); }
 void tui_scale(double sx, double sy)     { if (g_cr) cairo_scale(g_cr, sx, sy); }
 void tui_rotate(double deg)              { if (g_cr) cairo_rotate(g_cr, deg * M_PI / 180.0); }
+void tui_clip(double x, double y, double w, double h) {
+    if (g_cr) { cairo_rectangle(g_cr, x, y, w, h); cairo_clip(g_cr); }
+}
 
 void tui_run(void) {
     XMapWindow(g_dpy, g_win);
@@ -102,6 +106,8 @@ void tui_run(void) {
                 case LeaveNotify:  tuiMouseMove(-1.0, -1.0); break;
                 case ButtonPress:
                     if (e.xbutton.button == Button1) tuiMouseDown(e.xbutton.x, e.xbutton.y);
+                    else if (e.xbutton.button == 4) { tuiMouseMove(e.xbutton.x, e.xbutton.y); tuiWheel(0.0, -40.0); }
+                    else if (e.xbutton.button == 5) { tuiMouseMove(e.xbutton.x, e.xbutton.y); tuiWheel(0.0, 40.0); }
                     break;
                 case ButtonRelease:
                     if (e.xbutton.button == Button1) tuiMouseUp(e.xbutton.x, e.xbutton.y);

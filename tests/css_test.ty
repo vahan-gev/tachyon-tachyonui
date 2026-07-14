@@ -337,3 +337,206 @@ function inputSizing(): void {
     assertEq(uiW[inp], 240.0);
     assertEq(uiH[inp], 36.0);
 }
+
+// ---- v0.3: routing, text wrapping, new elements & CSS ----------------------
+
+@test
+function newCssProperties(): void {
+    let b = uiBox();
+    uiAddClass(b, "t16css");
+    cssParse(".t16css { text-align: center; line-height: 22px; white-space: nowrap; "
+             + "overflow: scroll; display: none; position: absolute; "
+             + "top: 10px; left: 20px; z-index: 5; min-width: 50px; max-width: 300px; "
+             + "min-height: 40px; max-height: 400px; text-decoration: underline; "
+             + "box-shadow: 0 4px 12px; }");
+    let st = cssCompute(b, false);
+    assertEq(st.textAlign, 1);
+    assertEq(st.lineHeight, 22.0);
+    assertEq(st.nowrap, true);
+    assertEq(st.overflow, 2);
+    assertEq(st.display, 0);
+    assertEq(st.position, 2);
+    assertEq(st.posT, 10.0);
+    assertEq(st.posL, 20.0);
+    assertEq(st.zIndex, 5);
+    assertEq(st.minW, 50.0);
+    assertEq(st.maxW, 300.0);
+    assertEq(st.underline, true);
+    assertEq(st.shadow, true);
+}
+
+@test
+function textWrapping(): void {
+    // explicit newlines always split, regardless of width
+    let a = uiWrapLines("one\ntwo\nthree", 1000.0, 14.0, 0, false);
+    assertEq(a.len(), 3L);
+    assertEq(a[0], "one");
+    assertEq(a[2], "three");
+
+    // nowrap collapses to one line per paragraph
+    let b = uiWrapLines("a b c d e f g h", 1.0, 14.0, 0, true);
+    assertEq(b.len(), 1L);
+
+    // a tiny width forces each word onto its own line
+    let c = uiWrapLines("alpha beta gamma", 1.0, 14.0, 0, false);
+    assertEq(c.len(), 3L);
+
+    // a wide width keeps it on one line
+    let d = uiWrapLines("alpha beta gamma", 10000.0, 14.0, 0, false);
+    assertEq(d.len(), 1L);
+}
+
+@test
+function radioGroups(): void {
+    let a = uiRadio("t18color");
+    let b = uiRadio("t18color");
+    let c = uiRadio("t18size");           // a different group
+    uiSelectRadio(a);
+    assertEq(uiIsChecked(a), true);
+    assertEq(uiIsChecked(b), false);
+    assertEq(uiRadioSelected("t18color"), a);
+
+    uiSelectRadio(b);                     // selecting b clears a
+    assertEq(uiIsChecked(a), false);
+    assertEq(uiIsChecked(b), true);
+    assertEq(uiRadioSelected("t18color"), b);
+
+    uiSelectRadio(c);                     // other group is independent
+    assertEq(uiIsChecked(b), true);
+    assertEq(uiRadioSelected("t18size"), c);
+}
+
+@test
+function sliderAndProgress(): void {
+    let s = uiSlider();
+    assertEq(uiSliderValue(s), 0.5);      // default midpoint
+    uiSetSliderValue(s, 0.75);
+    assertEq(uiSliderValue(s), 0.75);
+    uiSetSliderValue(s, 2.0);             // clamped to 1
+    assertEq(uiSliderValue(s), 1.0);
+    uiSetSliderValue(s, -1.0);            // clamped to 0
+    assertEq(uiSliderValue(s), 0.0);
+
+    let p = uiProgress();
+    uiSetProgress(p, 0.3);
+    assertEq(uiVal[p], 0.3);
+}
+
+@test
+function textareaEditing(): void {
+    let ta = uiTextarea("notes");
+    uiFocus(ta);
+    tuiTextInput(104); tuiTextInput(105);   // "hi"
+    tuiKeyDown(13);                          // Enter inserts a newline (not blur)
+    assertEq(uiFocused(), ta);               // still focused
+    tuiTextInput(121); tuiTextInput(111);    // "yo"
+    assertEq(uiValue(ta), "hi\nyo");
+    tuiKeyDown(27);                          // escape blurs
+    assertEq(uiFocused(), -1L);
+}
+
+@test
+function displayNoneAndLayout(): void {
+    let root = uiBox(); uiSetId(root, "t20root");
+    let a = uiBox(); uiAddClass(a, "t20a");
+    let hidden = uiBox(); uiAddClass(hidden, "t20hidden");
+    let b = uiBox(); uiAddClass(b, "t20b");
+    uiAppend(root, a); uiAppend(root, hidden); uiAppend(root, b);
+    cssParse("#t20root { padding: 0px; gap: 0px; } "
+             + ".t20a { height: 30px; } .t20hidden { height: 100px; display: none; } "
+             + ".t20b { height: 40px; }");
+    uiSetRoot(root);
+    uiComputeStyles();
+    uiLayoutRoot(200.0, 500.0);
+    assertEq(uiY[a], 0.0);
+    assertEq(uiH[hidden], 0.0);            // hidden takes no space
+    assertEq(uiY[b], 30.0);               // b sits directly after a (hidden skipped)
+}
+
+@test
+function absolutePositioning(): void {
+    let root = uiBox(); uiSetId(root, "t21root");
+    let abs = uiBox(); uiAddClass(abs, "t21abs");
+    uiAppend(root, abs);
+    cssParse("#t21root { padding: 0px; } "
+             + ".t21abs { position: absolute; top: 15px; left: 25px; "
+             + "width: 50px; height: 50px; }");
+    uiSetRoot(root);
+    uiComputeStyles();
+    uiLayoutRoot(300.0, 300.0);
+    assertEq(uiX[abs], 25.0);
+    assertEq(uiY[abs], 15.0);
+}
+
+@test
+function minMaxClamping(): void {
+    let root = uiBox(); uiSetId(root, "t22root");
+    let wide = uiBox(); uiAddClass(wide, "t22wide");
+    uiAppend(root, wide);
+    cssParse("#t22root { padding: 0px; } "
+             + ".t22wide { width: 1000px; max-width: 200px; height: 10px; }");
+    uiSetRoot(root);
+    uiComputeStyles();
+    uiLayoutRoot(800.0, 300.0);
+    assertEq(uiW[wide], 200.0);            // clamped by max-width
+}
+
+@test
+function scrollContentHeight(): void {
+    let root = uiBox(); uiSetId(root, "t23root");
+    for (i in 0..5) {
+        let item = uiBox(); uiAddClass(item, "t23item");
+        uiAppend(root, item);
+    }
+    cssParse("#t23root { height: 100px; overflow: scroll; padding: 0px; gap: 0px; } "
+             + ".t23item { height: 50px; }");
+    uiSetRoot(root);
+    uiComputeStyles();
+    uiLayoutRoot(200.0, 100.0);
+    assertEq(uiH[root], 100.0);            // box stays the fixed height
+    assertEq(uiContentH[root], 250.0);     // 5 * 50 content
+    // wheel scrolls, clamped to content - box
+    uiMouseX = 50.0; uiMouseY = 50.0;
+    tuiWheel(0.0, 1000.0);
+    assertEq(uiScrollY[root], 150.0);      // clamped to 250 - 100
+    tuiWheel(0.0, -1000.0);
+    assertEq(uiScrollY[root], 0.0);        // clamped to 0
+}
+
+@test
+function routing(): void {
+    uiPage("/t24home", () => {
+        let b = uiBox(); uiSetId(b, "t24homebox"); return b;
+    });
+    uiPage("/t24users/:id", () => {
+        let b = uiLabel(`user ${uiRouteParam("id")}`); return b;
+    });
+
+    uiNavigate("/t24home");
+    assertEq(uiCurrentRoute(), "/t24home");
+    assertEq(uiIdName[uiRootId], "t24homebox");
+
+    uiNavigate("/t24users/42");
+    assertEq(uiCurrentRoute(), "/t24users/42");
+    assertEq(uiRouteParam("id"), "42");
+    assertEq(uiGetText(uiRootId), "user 42");
+
+    uiBack();                              // returns to home
+    assertEq(uiCurrentRoute(), "/t24home");
+
+    assertEq(uiRouteActive("/t24home"), true);
+    assertEq(uiRouteActive("/t24users/42"), false);
+
+    // a link navigates when clicked
+    uiNavigate("/t24home");
+    let link = uiLink("go", "/t24users/7");
+    let root = uiBox(); uiSetId(root, "t24linkroot");
+    uiAppend(root, link);
+    uiSetRoot(root);
+    uiComputeStyles();
+    uiLayoutRoot(300.0, 200.0);
+    tuiMouseDown(uiX[link] + 2.0, uiY[link] + 2.0);
+    tuiMouseUp(uiX[link] + 2.0, uiY[link] + 2.0);
+    assertEq(uiCurrentRoute(), "/t24users/7");
+    assertEq(uiRouteParam("id"), "7");
+}

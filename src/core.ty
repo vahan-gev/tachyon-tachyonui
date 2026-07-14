@@ -8,9 +8,10 @@
 // Every element is styled with CSS via uiCss / uiCssFile.
 
 // ---- widget stores (id = index) ----
-// kinds: 0 box, 1 label, 2 button, 3 image, 4 input, 5 checkbox
+// kinds: 0 box, 1 label, 2 button, 3 image, 4 input, 5 checkbox,
+//        6 textarea, 7 radio, 8 slider, 9 link, 10 progress
 static mut uiKind: Vec<int> = Vec();
-static mut uiText: Vec<string> = Vec();         // text, image path, or input value
+static mut uiText: Vec<string> = Vec();         // text, image path, or input/textarea value
 static mut uiIdName: Vec<string> = Vec();       // css #id
 static mut uiClasses: Vec<Vec<string>> = Vec();
 static mut uiChildren: Vec<Vec<long>> = Vec();
@@ -22,9 +23,14 @@ static mut uiX: Vec<double> = Vec();            // layout results
 static mut uiY: Vec<double> = Vec();
 static mut uiW: Vec<double> = Vec();
 static mut uiH: Vec<double> = Vec();
-static mut uiPlaceholder: Vec<string> = Vec();  // input placeholder text
-static mut uiChecked: Vec<bool> = Vec();        // checkbox state
-static mut uiCaret: Vec<long> = Vec();          // input caret (character index)
+static mut uiPlaceholder: Vec<string> = Vec();  // input/textarea placeholder text
+static mut uiChecked: Vec<bool> = Vec();        // checkbox / radio state
+static mut uiCaret: Vec<long> = Vec();          // input/textarea caret (character index)
+static mut uiHref: Vec<string> = Vec();         // link target path
+static mut uiGroup: Vec<string> = Vec();        // radio group name
+static mut uiVal: Vec<double> = Vec();          // slider / progress value (0..1)
+static mut uiScrollY: Vec<double> = Vec();      // scroll offset for overflow boxes
+static mut uiContentH: Vec<double> = Vec();     // measured full content height (for scroll)
 
 static mut uiRootId: long = -1L;
 static mut uiMouseX: double = -1.0;
@@ -68,6 +74,11 @@ function uiNew(kind: int, text: string): long {
     uiPlaceholder.push("");
     uiChecked.push(false);
     uiCaret.push(0L);
+    uiHref.push("");
+    uiGroup.push("");
+    uiVal.push(0.0);
+    uiScrollY.push(0.0);
+    uiContentH.push(0.0);
     return id;
 }
 
@@ -84,6 +95,47 @@ function uiInput(placeholder: string): long {
 }
 /// A toggle box. Starts unchecked; clicking it flips the state and fires onChange.
 function uiCheckbox(): long { return uiNew(5, ""); }
+
+/// A multi-line editable text area. Enter inserts a newline; text wraps to width.
+function uiTextarea(placeholder: string): long {
+    let id = uiNew(6, "");
+    uiPlaceholder[id] = placeholder;
+    return id;
+}
+/// A radio button in `group`. Selecting one deselects the others in the same group.
+function uiRadio(group: string): long {
+    let id = uiNew(7, "");
+    uiGroup[id] = group;
+    return id;
+}
+/// A draggable slider with value in 0..1 (get/set with uiSliderValue/uiSetSliderValue).
+function uiSlider(): long {
+    let id = uiNew(8, "");
+    uiVal[id] = 0.5;
+    return id;
+}
+/// Clickable text that navigates to `path` (see uiPage / uiNavigate).
+function uiLink(text: string, path: string): long {
+    let id = uiNew(9, text);
+    uiHref[id] = path;
+    return id;
+}
+/// A progress bar; set fill 0..1 with uiSetProgress.
+function uiProgress(): long { return uiNew(10, ""); }
+/// A heading (level 1-3): a label with the `h1`/`h2`/`h3` class and larger default type.
+function uiHeading(text: string, level: int): long {
+    let id = uiNew(1, text);
+    if (level <= 1) { uiAddClass(id, "h1"); }
+    else if (level == 2) { uiAddClass(id, "h2"); }
+    else { uiAddClass(id, "h3"); }
+    return id;
+}
+/// A horizontal divider (a thin full-width line).
+function uiDivider(): long {
+    let id = uiNew(0, "");
+    uiAddClass(id, "hr");
+    return id;
+}
 
 function uiAppend(parent: long, child: long): void {
     uiChildren[parent].push(child);
@@ -140,6 +192,40 @@ function uiIsChecked(id: long): bool { return uiChecked[id]; }
 function uiSetChecked(id: long, b: bool): void {
     uiChecked[id] = b;
     tui_redraw();
+}
+
+// ---- slider / progress values (0..1) ----
+function uiSliderValue(id: long): double { return uiVal[id]; }
+function uiSetSliderValue(id: long, v: double): void {
+    uiVal[id] = uiClamp01(v);
+    tui_redraw();
+}
+function uiSetProgress(id: long, v: double): void {
+    uiVal[id] = uiClamp01(v);
+    tui_redraw();
+}
+function uiClamp01(v: double): double {
+    if (v < 0.0) { return 0.0; }
+    if (v > 1.0) { return 1.0; }
+    return v;
+}
+
+// ---- radio: select this one, deselect the rest of its group ----
+function uiSelectRadio(id: long): void {
+    let grp = uiGroup[id];
+    for (w in 0L..uiKind.len()) {
+        if (uiKind[w] == 7 && uiGroup[w] == grp) {
+            uiChecked[w] = w == id;
+        }
+    }
+    tui_redraw();
+}
+/// The selected radio id in `group`, or -1 if none.
+function uiRadioSelected(group: string): long {
+    for (w in 0L..uiKind.len()) {
+        if (uiKind[w] == 7 && uiGroup[w] == group && uiChecked[w]) { return w; }
+    }
+    return -1L;
 }
 
 // ---- focus ----
@@ -379,6 +465,11 @@ function tuiRender(w: int, h: int): void {
 function tuiMouseMove(x: double, y: double): void {
     uiMouseX = x;
     uiMouseY = y;
+    // dragging a slider tracks the mouse even outside the thumb
+    if (uiPressedId >= 0L && uiKind[uiPressedId] == 8) {
+        uiSliderFromMouse(uiPressedId);
+        return;
+    }
     let h = uiHitTest();
     if (h != uiHoverId) {
         uiHoverId = h;
@@ -388,11 +479,25 @@ function tuiMouseMove(x: double, y: double): void {
     else { tui_set_cursor(0); }
 }
 
+function uiIsFocusable(id: long): bool {     // input or textarea
+    return uiKind[id] == 4 || uiKind[id] == 6;
+}
+function uiSliderFromMouse(id: long): void {
+    let w = uiW[id];
+    if (w <= 0.0) { return; }
+    uiVal[id] = uiClamp01((uiMouseX - uiX[id]) / w);
+    uiFireChange(id);
+    tui_redraw();
+}
+
 @export
 function tuiMouseDown(x: double, y: double): void {
     uiMouseX = x;
     uiMouseY = y;
     uiPressedId = uiHitTest();
+    if (uiPressedId >= 0L && uiKind[uiPressedId] == 8) {   // slider: drag from here
+        uiSliderFromMouse(uiPressedId);
+    }
 }
 
 @export
@@ -401,19 +506,24 @@ function tuiMouseUp(x: double, y: double): void {
     uiMouseY = y;
     let t = uiHitTest();
     if (t >= 0L && uiPressedId >= 0L) {
-        // focus: clicking an input focuses it; clicking anything else blurs
+        // focus: clicking an input/textarea focuses it; clicking anything else blurs
         let newFocus = -1L;
-        if (uiKind[t] == 4) { newFocus = t; }
+        if (uiIsFocusable(t)) { newFocus = t; }
         if (newFocus != uiFocusId) {
             uiFocusId = newFocus;
             if (newFocus >= 0L) { uiCaret[newFocus] = uiText[newFocus].charLen(); }
             tui_redraw();
         }
-        // checkbox: clicking toggles and fires onChange
+        // checkbox toggles; radio selects its group
         if (uiKind[t] == 5) {
             uiChecked[t] = !uiChecked[t];
             uiFireChange(t);
             tui_redraw();
+        } else if (uiKind[t] == 7) {
+            uiSelectRadio(t);
+            uiFireChange(t);
+        } else if (uiKind[t] == 9) {          // link: navigate
+            uiNavigate(uiHref[t]);
         }
         // onClick: nearest self-or-ancestor handler
         let hi = uiFindHandler(t);
@@ -429,15 +539,33 @@ function tuiMouseUp(x: double, y: double): void {
 }
 
 @export
+function tuiWheel(dx: double, dy: double): void {
+    // scroll the nearest scrollable box under the pointer
+    let node = uiHitTest();
+    while (node >= 0L) {
+        if (uiStyle[node].overflow == 2 && uiContentH[node] > uiH[node]) {
+            let maxScroll = uiContentH[node] - uiH[node];
+            let s = uiScrollY[node] + dy;
+            if (s < 0.0) { s = 0.0; }
+            if (s > maxScroll) { s = maxScroll; }
+            if (s != uiScrollY[node]) { uiScrollY[node] = s; tui_redraw(); }
+            return;
+        }
+        node = uiParent[node];
+    }
+}
+
+@export
 function tuiResize(w: int, h: int): void {
     tui_redraw();
 }
 
 @export
 function tuiKeyDown(key: int): void {
-    // editing keys go to the focused input first
-    if (uiFocusId >= 0L && uiKind[uiFocusId] == 4) {
+    // editing keys go to the focused input/textarea first
+    if (uiFocusId >= 0L && uiIsFocusable(uiFocusId)) {
         let id = uiFocusId;
+        let isArea = uiKind[id] == 6;
         if (key == 8) {                              // backspace
             if (uiCaret[id] > 0L) {
                 uiText[id] = uiStrDeleteBefore(uiText[id], uiCaret[id]);
@@ -452,7 +580,16 @@ function tuiKeyDown(key: int): void {
                 uiCaret[id] = uiCaret[id] + 1L;
                 tui_redraw();
             }
-        } else if (key == 13 || key == 27) {         // enter / escape: blur
+        } else if (key == 13) {                      // enter
+            if (isArea) {                            // textarea: insert a newline
+                uiText[id] = uiStrInsert(uiText[id], uiCaret[id], "\n");
+                uiCaret[id] = uiCaret[id] + 1L;
+                uiFireChange(id);
+                tui_redraw();
+            } else {                                 // input: blur (submit)
+                uiBlur();
+            }
+        } else if (key == 27) {                      // escape: blur
             uiBlur();
         }
     }
@@ -463,7 +600,7 @@ function tuiKeyDown(key: int): void {
 
 @export
 function tuiTextInput(cp: int): void {
-    if (uiFocusId < 0L || uiKind[uiFocusId] != 4) { return; }
+    if (uiFocusId < 0L || !uiIsFocusable(uiFocusId)) { return; }
     let id = uiFocusId;
     let ins = fromCodePoint(cp);
     uiText[id] = uiStrInsert(uiText[id], uiCaret[id], ins);

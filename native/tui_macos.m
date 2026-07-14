@@ -25,6 +25,7 @@ extern void tuiMouseUp(double x, double y);
 extern void tuiResize(int32_t w, int32_t h);
 extern void tuiKeyDown(int32_t keycode);
 extern void tuiTextInput(int32_t codepoint);   // a typed printable character
+extern void tuiWheel(double dx, double dy);    // scroll wheel / trackpad
 
 static NSWindow* g_window = nil;
 static NSView* g_view = nil;
@@ -72,6 +73,12 @@ enum { TUI_KEY_BACKSPACE = 8, TUI_KEY_TAB = 9, TUI_KEY_ENTER = 13,
 - (void)mouseUp:(NSEvent*)e {
     NSPoint p = [self convertPoint:e.locationInWindow fromView:nil];
     tuiMouseUp(p.x, p.y);
+}
+- (void)scrollWheel:(NSEvent*)e {
+    NSPoint p = [self convertPoint:e.locationInWindow fromView:nil];
+    tuiMouseMove(p.x, p.y);                 /* keep the hovered node current */
+    double m = e.hasPreciseScrollingDeltas ? 1.0 : 16.0;
+    tuiWheel(-e.scrollingDeltaX * m, -e.scrollingDeltaY * m);
 }
 - (void)keyDown:(NSEvent*)e {
     NSString* chars = e.characters;
@@ -185,6 +192,9 @@ void tui_scale(double sx, double sy) {
 void tui_rotate(double deg) {
     NSAffineTransform* t = [NSAffineTransform transform];
     [t rotateByDegrees:deg]; [t concat];
+}
+void tui_clip(double x, double y, double w, double h) {
+    NSRectClip(NSMakeRect(x, y, w, h));
 }
 
 /* ---------- drawing (valid inside tuiRender) ---------- */
