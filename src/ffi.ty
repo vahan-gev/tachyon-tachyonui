@@ -35,3 +35,7 @@ extern function tui_scale(sx: double, sy: double): void;
 extern function tui_rotate(deg: double): void;
 // clip the current save()/restore() scope to a rectangle (for §scroll/overflow)
 extern function tui_clip(x: double, y: double, w: double, h: double): void;
+
+// system clipboard (for copy/paste into text fields)
+extern function tui_clipboard_get(): string;
+extern function tui_clipboard_set(s: string): void;

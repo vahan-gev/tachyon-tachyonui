@@ -41,7 +41,7 @@ Add the library as a dependency in your project's `Tachyon.toml`:
 ```toml
 [package]
 name = "myapp"
-deps = ["git+https://github.com/vahan-gev/tachyon-tachyonui#v0.3.0"]
+deps = ["git+https://github.com/vahan-gev/tachyon-tachyonui#v0.4.0"]
 ```
 
 `tachyon run` / `tachyon build` then compiles the library's `.ty` sources with
@@ -75,7 +75,11 @@ HTML-adjacent, deliberately renamed:
 | `uiRadio(group)` | `radio` | `<input type=radio>` | grouped; `uiSelectRadio` / `uiRadioSelected(group)` |
 | `uiSlider()` | `slider` | `<input type=range>` | draggable 0..1; `uiSliderValue` / `uiSetSliderValue` |
 | `uiProgress()` | `progress` | `<progress>` | `uiSetProgress(id, 0..1)` |
+| `uiSelect(options)` | `select` | `<select>` | dropdown; click to open an overlay list, pick to set |
 | `uiDivider()` | `box.hr` | `<hr>` | thin full-width line |
+
+Any button/label/link can take an **icon** with `uiSetIcon(id, path)` (or
+`uiIconButton(text, icon)`); size it with the `icon-size` CSS property.
 
 ## API
 
@@ -92,7 +96,10 @@ HTML-adjacent, deliberately renamed:
 `uiIsChecked(id)` / `uiSetChecked(id, bool)` (checkbox),
 `uiSelectRadio(id)` / `uiRadioSelected(group)` (radio),
 `uiSliderValue(id)` / `uiSetSliderValue(id, 0..1)` (slider),
-`uiSetProgress(id, 0..1)`, `uiFocus(id)` / `uiBlur()` / `uiFocused()`
+`uiSetProgress(id, 0..1)`, `uiSelectValue(id)` / `uiSetSelectValue(id, s)` (select),
+`uiSetIcon(id, path)` (any text element), `uiFocus(id)` / `uiBlur()` / `uiFocused()`
+
+Text fields support **clipboard** copy/paste/cut (Cmd/Ctrl+C/V/X).
 
 **Routing** — `uiPage(pattern, () => rootWidget)` registers a screen;
 `uiNavigate(path)` switches to it (patterns take `:param` captures);
@@ -142,10 +149,11 @@ function main(): void {
 
 ## CSS support
 
-**Selectors** — `box` / `label` / `button` / `img`, `.class`, `#id`, `*`, `:hover`,
-compounds like `button.primary:hover`, comma lists. Cascade order is
-(specificity: id=100, class/pseudo=10, tag=1), then source order. One simple
-selector per rule (no descendant combinators yet).
+**Selectors** — tags, `.class`, `#id`, `*`; pseudo-classes `:hover`, `:focus`,
+`:active`; compounds like `button.primary:hover`; **descendant** (`.card .title`)
+and **child** (`.card > .title`) combinators; comma lists; and **`@media`**
+queries (`@media (min-width: 600px) { … }`). Cascade order is (specificity:
+id=100, class/pseudo=10, tag=1), then source order.
 
 **Properties**
 
@@ -156,7 +164,7 @@ selector per rule (no descendant combinators yet).
 | Color | `background-color`/`background`, `color` — `#rgb`, `#rrggbb`, `#rrggbbaa`, `rgb()`, `rgba()`, named |
 | Border | `border-width`, `border-color`, `border-radius`, `border` shorthand |
 | Text | `font-size`, `font-weight` (`bold`/`normal`/numeric) |
-| Flex | `flex-direction` (`column` default / `row`), `gap`, `justify-content` (`flex-start`/`center`/`flex-end`/`space-between`), `align-items` (`flex-start`/`center`/`flex-end`/`stretch`) |
+| Flex | `flex-direction` (`column` default / `row`), `flex-wrap` (`wrap`), `gap`, `justify-content` (`flex-start`/`center`/`flex-end`/`space-between`), `align-items` (`flex-start`/`center`/`flex-end`/`stretch`) |
 | Text | `text-align` (`left`/`center`/`right`), `line-height`, `white-space` (`normal`/`nowrap`), `text-decoration: underline` |
 | Sizing bounds | `min-width`, `max-width`, `min-height`, `max-height` |
 | Overflow | `overflow` / `overflow-y` (`visible`/`hidden`/`scroll`/`auto`) — a scroll box clips and wheel-scrolls its content |
@@ -213,12 +221,14 @@ Set `TUI_AUTOQUIT_MS=<ms>` to auto-close the window (used for smoke tests).
 
 ## Current limitations
 
-- `:hover` is the only pseudo-class (`:active`/`:focus` planned).
-- Simple selectors only — no descendant/child combinators, no `@media`.
-- No `flex-wrap` or CSS grid; one flex axis per box.
-- Text controls are ASCII/Latin-oriented; no selection, clipboard, or IME.
-- No native dropdown/`<select>`, date pickers, or menus (compose from
-  boxes + buttons + a router-driven overlay).
+- No CSS grid (use flex + `flex-wrap`); no `@keyframes` (use `transition`).
+- Pseudo-classes are `:hover` / `:focus` / `:active`; no `:nth-child` etc.
+- Text fields have no in-field **selection** highlight (copy/cut act on the whole
+  value) and no **IME** / composition — ASCII/Latin editing.
+- No native date/time picker; the dropdown is TachyonUI's own overlay, not an OS
+  control.
+- Cross-application clipboard on **X11** is process-local (the full selection
+  protocol is a roadmap item); macOS and Windows use the real system clipboard.
 - Navigating builds fresh widgets (ids are append-only), so memory grows with
   navigation count over a very long session — the bootstrap arena never frees.
   Fine for tools and apps; addressed by the v1.0 ownership runtime.

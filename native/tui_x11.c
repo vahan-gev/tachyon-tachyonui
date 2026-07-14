@@ -30,6 +30,7 @@ extern void tuiResize(int32_t w, int32_t h);
 extern void tuiKeyDown(int32_t keycode);
 extern void tuiTextInput(int32_t codepoint);
 extern void tuiWheel(double dx, double dy);
+extern void tuiCommand(int32_t action);
 
 static Display* g_dpy = 0;
 static Window g_win = 0;
@@ -81,6 +82,16 @@ void tui_clip(double x, double y, double w, double h) {
     if (g_cr) { cairo_rectangle(g_cr, x, y, w, h); cairo_clip(g_cr); }
 }
 
+/* clipboard — process-local (full X11 cross-app selection protocol is a roadmap
+   item; within the app, copy/paste works). */
+static char g_clip[8192];
+const char* tui_clipboard_get(void) { return g_clip; }
+void tui_clipboard_set(const char* s) {
+    if (!s) { g_clip[0] = 0; return; }
+    strncpy(g_clip, s, sizeof g_clip - 1);
+    g_clip[sizeof g_clip - 1] = 0;
+}
+
 void tui_run(void) {
     XMapWindow(g_dpy, g_win);
     XFlush(g_dpy);
@@ -115,6 +126,11 @@ void tui_run(void) {
                 case KeyPress: {
                     char kb[16]; KeySym ks = 0;
                     int kn = XLookupString(&e.xkey, kb, sizeof kb, &ks, 0);
+                    if (e.xkey.state & ControlMask) {   /* Ctrl+C/V/X */
+                        if (ks == XK_c || ks == XK_C) { tuiCommand(1); break; }
+                        if (ks == XK_v || ks == XK_V) { tuiCommand(2); break; }
+                        if (ks == XK_x || ks == XK_X) { tuiCommand(3); break; }
+                    }
                     switch (ks) {
                         case XK_BackSpace: tuiKeyDown(8); break;
                         case XK_Tab:       tuiKeyDown(9); break;

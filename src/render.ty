@@ -38,11 +38,20 @@ function uiPaint(id: long, inheritedOpacity: double): void {
     let k = uiKind[id];
     if (k == 1 || k == 9) {                           // label / link: wrapped text
         uiPaintText(id, st, x, y, w, h, op);
-    } else if (k == 2) {                              // button: centered single line
-        let tw = tui_text_width(uiText[id], st.fontSize, uiBoldInt(st));
+    } else if (k == 2) {                              // button: centered icon + text
+        let bold = uiBoldInt(st);
+        let tw = tui_text_width(uiText[id], st.fontSize, bold);
         let th = tui_text_height(st.fontSize);
-        tui_text(uiText[id], x + (w - tw) / 2.0, y + (h - th) / 2.0,
-                 st.fontSize, uiBoldInt(st), st.fgR, st.fgG, st.fgB, st.fgA * op);
+        let idim = 0.0;
+        let gap = 0.0;
+        if (uiHasIcon(id)) {
+            idim = uiIconDim(id, st);
+            if (uiText[id].len() > 0L) { gap = uiIconGap(); }
+        }
+        let bx = x + (w - (idim + gap + tw)) / 2.0;
+        if (idim > 0.0) { tui_image(uiIcon[id], bx, y + (h - idim) / 2.0, idim, idim); }
+        tui_text(uiText[id], bx + idim + gap, y + (h - th) / 2.0,
+                 st.fontSize, bold, st.fgR, st.fgG, st.fgB, st.fgA * op);
     } else if (k == 3) {                              // image
         tui_image(uiText[id], x + st.padL, y + st.padT,
                   w - st.padL - st.padR, h - st.padT - st.padB);
@@ -65,6 +74,13 @@ function uiPaint(id: long, inheritedOpacity: double): void {
     } else if (k == 10) {                             // progress: track + fill
         let fw = w * uiClamp01(uiVal[id]);
         tui_rect(x, y, fw, h, st.radius, 0.15, 0.39, 0.92, op);
+    } else if (k == 11) {                             // select: value + chevron
+        let bold = uiBoldInt(st);
+        let th = tui_text_height(st.fontSize);
+        tui_text(uiText[id], x + st.padL, y + (h - th) / 2.0, st.fontSize, bold,
+                 st.fgR, st.fgG, st.fgB, st.fgA * op);
+        tui_text("▾", x + w - 16.0, y + (h - th) / 2.0, st.fontSize, 0,
+                 st.fgR, st.fgG, st.fgB, 0.7 * op);
     }
 
     // children — clipped for scroll/hidden, painted in z-index order
@@ -120,6 +136,14 @@ function uiPaintText(id: long, st: TuiStyle, x: double, y: double,
     let cw = w - st.padL - st.padR;
     let lh = uiEffLineHeight(st);
     let bold = uiBoldInt(st);
+    // an icon sits at the left; the text is indented past it
+    if (uiHasIcon(id)) {
+        let idim = uiIconDim(id, st);
+        tui_image(uiIcon[id], cx, y + st.padT + (lh - idim) / 2.0, idim, idim);
+        let off = idim + uiIconGap();
+        cx += off;
+        cw -= off;
+    }
     let lines = uiWrapLines(uiTextOf(id), cw, st.fontSize, bold, st.nowrap);
     let ty = y + st.padT;
     for (line in lines) {
@@ -184,4 +208,35 @@ function uiPaintSlider(id: long, st: TuiStyle, x: double, y: double,
     let ty = y + h / 2.0 - r;
     tui_rect(tx, ty, r * 2.0, r * 2.0, 999.0, 1.0, 1.0, 1.0, op);       // thumb
     tui_border(tx, ty, r * 2.0, r * 2.0, 999.0, 1.0, 0.15, 0.39, 0.92, op);
+}
+
+// the open dropdown's option list, painted on top of everything (overlay)
+function uiPaintSelectPopup(sel: long): void {
+    let st = uiShown[sel];
+    let px = uiX[sel];
+    let py = uiY[sel] + uiH[sel] + 2.0;
+    let pw = uiW[sel];
+    let rowH = uiOptionRowH();
+    let opts = uiOptions[sel];
+    let ph = rowH * (opts.len() as double);
+
+    // soft shadow + panel
+    let ss = TuiStyle();
+    ss.shadow = true; ss.radius = 8.0; ss.shadowY = 6.0; ss.shadowBlur = 18.0;
+    uiPaintShadow(ss, px, py, pw, ph, 1.0);
+    tui_rect(px, py, pw, ph, 8.0, 1.0, 1.0, 1.0, 1.0);
+    tui_border(px, py, pw, ph, 8.0, 1.0, 0.78, 0.80, 0.84, 1.0);
+
+    let th = tui_text_height(st.fontSize);
+    for (i in 0L..opts.len()) {
+        let ry = py + rowH * (i as double);
+        let hover = uiMouseX >= px && uiMouseX <= px + pw &&
+                    uiMouseY >= ry && uiMouseY <= ry + rowH;
+        if (hover) { tui_rect(px, ry, pw, rowH, 0.0, 0.93, 0.95, 0.99, 1.0); }
+        let selected = opts[i] == uiText[sel];
+        let fr = 0.09; let fg = 0.11; let fb = 0.15;
+        if (selected) { fr = 0.15; fg = 0.39; fb = 0.92; }
+        tui_text(opts[i], px + 10.0, ry + (rowH - th) / 2.0, st.fontSize,
+                 uiBoldInt(st), fr, fg, fb, 1.0);
+    }
 }

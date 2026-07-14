@@ -25,6 +25,7 @@ struct TuiStyle {
     width: double = -1.0;  widthPct: bool = false;
     height: double = -1.0; heightPct: bool = false;
     row: bool = false;      // flex-direction
+    wrap: bool = false;     // flex-wrap
     gap: double = 0.0;
     justify: int = 0;       // 0 start, 1 center, 2 end, 3 space-between
     align: int = 3;         // 0 start, 1 center, 2 end, 3 stretch (boxes only)
@@ -51,17 +52,30 @@ struct TuiStyle {
     underline: bool = false;
     shadow: bool = false;   // box-shadow (a soft offset drop shadow)
     shadowY: double = 4.0; shadowBlur: double = 12.0; shadowA: double = 0.18;
+    iconSize: double = 0.0; // 0 = auto (derive from font size)
 }
 
-struct TuiRule {
+// one compound selector, e.g. `button.primary:hover`
+struct TuiSimple {
     tag: string;
     idName: string;
     classes: Vec<string>;
     hover: bool;
+    focus: bool;
+    active: bool;
+    child: bool;        // the combinator to the NEXT part is `>` (direct child)
+}
+
+struct TuiRule {
+    parts: Vec<TuiSimple>;   // ancestor .. target; the last part matches the element
     spec: int;
     order: int;
     props: Vec<string>;
     vals: Vec<string>;
+    mMinW: double;           // @media constraints; -1 = unconstrained
+    mMaxW: double;
+    mMinH: double;
+    mMaxH: double;
 }
 
 static mut cssRules: Vec<TuiRule> = Vec();
@@ -85,19 +99,24 @@ function cssStripComments(s0: string): string {
 }
 
 function cssBadRule(): TuiRule {
-    let c: Vec<string> = Vec();
+    let parts: Vec<TuiSimple> = Vec();
     let p: Vec<string> = Vec();
     let v: Vec<string> = Vec();
-    return TuiRule("", "", c, false, -1, 0, p, v);
+    return TuiRule(parts, -1, 0, p, v, -1.0, -1.0, -1.0, -1.0);
 }
 
-function cssParseSelector(sel0: string): TuiRule {
-    let sel = sel0.trim();
-    if (sel == "") { return cssBadRule(); }
+// parse one compound (`tag.class#id:hover`); spec added into `spec` out-vars via
+// the return's fields. tag "" allowed (universal). Returns a bad flag via focus?
+// no — returns a TuiSimple; the caller computes validity by re-checking.
+function cssBadSimple(): TuiSimple {
+    let c: Vec<string> = Vec();
+    return TuiSimple("!bad", "", c, false, false, false, false);
+}
+
+function cssParseCompound(sel: string): TuiSimple {
     let classes: Vec<string> = Vec();
-    let dp: Vec<string> = Vec();
-    let dv: Vec<string> = Vec();
-    if (sel == "*") { return TuiRule("", "", classes, false, 0, 0, dp, dv); }
+    if (sel == "" || sel == ">") { return cssBadSimple(); }
+    if (sel == "*") { return TuiSimple("", "", classes, false, false, false, false); }
 
     let n = sel.len();
     let i: long = 0L;
@@ -106,10 +125,8 @@ function cssParseSelector(sel0: string): TuiRule {
     if (tag == "image") { tag = "img"; }
     let idn = "";
     let hover = false;
-    let specTag = 0;
-    if (tag != "") { specTag = 1; }
-    let specCls = 0;
-    let specId = 0;
+    let focus = false;
+    let active = false;
 
     while (i < n) {
         let c = sel.charAt(i);
@@ -119,34 +136,124 @@ function cssParseSelector(sel0: string): TuiRule {
         let name = sel.sub(i, j);
         i = j;
         if (c == ".") {
-            if (name == "") { return cssBadRule(); }
+            if (name == "") { return cssBadSimple(); }
             classes.push(name);
-            specCls += 1;
         } else if (c == "#") {
-            if (name == "") { return cssBadRule(); }
+            if (name == "") { return cssBadSimple(); }
             idn = name;
-            specId += 1;
         } else if (c == ":") {
-            if (name.toLower() != "hover") { return cssBadRule(); }
-            hover = true;
-            specCls += 1;
+            let pseudo = name.toLower();
+            if (pseudo == "hover") { hover = true; }
+            else if (pseudo == "focus") { focus = true; }
+            else if (pseudo == "active") { active = true; }
+            else { return cssBadSimple(); }
         } else {
-            return cssBadRule();     // combinators / unknown syntax
+            return cssBadSimple();
         }
     }
-    let spec = specId * 100 + specCls * 10 + specTag;
-    return TuiRule(tag, idn, classes, hover, spec, 0, dp, dv);
+    return TuiSimple(tag, idn, classes, hover, focus, active, false);
+}
+
+function cssSimpleSpec(s: &TuiSimple): int {
+    let spec = 0;
+    if (s.idName != "") { spec += 100; }
+    spec += (s.classes.len() as int) * 10;
+    if (s.hover) { spec += 10; }
+    if (s.focus) { spec += 10; }
+    if (s.active) { spec += 10; }
+    if (s.tag != "") { spec += 1; }
+    return spec;
+}
+
+// parse a full selector, possibly with descendant (space) and child (`>`)
+// combinators: `.card > .row .title`. Returns a TuiRule with spec >= 0, or a
+// bad rule (spec -1) on any parse error.
+function cssParseSelector(sel0: string): TuiRule {
+    let sel = sel0.trim();
+    if (sel == "") { return cssBadRule(); }
+    // tokenize: make `>` its own token, then split on whitespace
+    let spaced = sel.replace(">", " > ");
+    let parts: Vec<TuiSimple> = Vec();
+    let spec = 0;
+    let pendingChild = false;
+    for (tok0 in spaced.split(" ")) {
+        let tok = tok0.trim();
+        if (tok == "") { continue; }
+        if (tok == ">") { pendingChild = true; continue; }
+        let s = cssParseCompound(tok);
+        if (s.tag == "!bad") { return cssBadRule(); }
+        if (pendingChild && parts.len() > 0L) {
+            parts[parts.len() - 1L].child = true;
+            pendingChild = false;
+        }
+        spec += cssSimpleSpec(&s);
+        parts.push(s);
+    }
+    if (parts.len() == 0L) { return cssBadRule(); }
+    let dp: Vec<string> = Vec();
+    let dv: Vec<string> = Vec();
+    return TuiRule(parts, spec, 0, dp, dv, -1.0, -1.0, -1.0, -1.0);
+}
+
+struct TuiMedia { minW: double; maxW: double; minH: double; maxH: double; }
+
+// parse `@media (min-width: 600px) and (max-height: 900px)`
+function cssMediaCond(prelude: string): TuiMedia {
+    let m = TuiMedia(-1.0, -1.0, -1.0, -1.0);
+    let s = prelude.toLower();
+    let parts = s.split("(");
+    for (p in parts) {
+        let colon = p.indexOf(":");
+        if (colon < 0L) { continue; }
+        let close = p.indexOf(")");
+        if (close < colon) { continue; }
+        let key = p.sub(0L, colon).trim();
+        let val = cssLen(p.sub(colon + 1L, close).trim());
+        if (key == "min-width") { m.minW = val; }
+        else if (key == "max-width") { m.maxW = val; }
+        else if (key == "min-height") { m.minH = val; }
+        else if (key == "max-height") { m.maxH = val; }
+    }
+    return m;
+}
+
+// index of the `}` that closes the `{` at `openIdx`
+function cssMatchBrace(text: string, openIdx: long): long {
+    let depth = 0L;
+    let i = openIdx;
+    let n = text.len();
+    while (i < n) {
+        let c = text.charAt(i);
+        if (c == "{") { depth += 1L; }
+        else if (c == "}") { depth -= 1L; if (depth == 0L) { return i; } }
+        i += 1L;
+    }
+    return -1L;
 }
 
 // parse a stylesheet and append its rules (later rules win ties)
 function cssParse(cssIn: string): void {
-    let text = cssStripComments(cssIn);
+    cssParseInto(cssStripComments(cssIn), TuiMedia(-1.0, -1.0, -1.0, -1.0));
+}
+
+function cssParseInto(text0: string, media: TuiMedia): void {
+    let text = text0;
     while (true) {
         let ob = text.indexOf("{");
         if (ob < 0L) { break; }
+        let prelude = text.sub(0L, ob).trim();
+
+        if (prelude.startsWith("@media")) {           // a nested media block
+            let close = cssMatchBrace(text, ob);
+            if (close < 0L) { break; }
+            let inner = text.sub(ob + 1L, close);
+            text = text.sub(close + 1L, text.len());
+            cssParseInto(inner, cssMediaCond(prelude));
+            continue;
+        }
+
         let cb = text.indexOf("}");
         if (cb < ob) { break; }
-        let selPart = text.sub(0L, ob);
         let body = text.sub(ob + 1L, cb);
         text = text.sub(cb + 1L, text.len());
 
@@ -162,11 +269,15 @@ function cssParse(cssIn: string): void {
                 vals.push(v);
             }
         }
-        for (sel in selPart.split(",")) {
+        for (sel in prelude.split(",")) {
             let r = cssParseSelector(sel);
             if (r.spec >= 0) {
-                cssRules.push(TuiRule(r.tag, r.idName, r.classes.clone(), r.hover,
-                                      r.spec, cssOrder, props.clone(), vals.clone()));
+                r.order = cssOrder;
+                r.props = props.clone();
+                r.vals = vals.clone();
+                r.mMinW = media.minW; r.mMaxW = media.maxW;
+                r.mMinH = media.minH; r.mMaxH = media.maxH;
+                cssRules.push(r);
                 cssOrder += 1;
             }
         }
@@ -399,6 +510,7 @@ function cssApplyProp(st0: TuiStyle, p: string, v: string): TuiStyle {
             st.bold = w == "bold" || w == "600" || w == "700" || w == "800" || w == "900";
         }
         "flex-direction" => { st.row = v.toLower() == "row"; }
+        "flex-wrap" => { st.wrap = v.toLower().startsWith("wrap"); }
         "gap" => { st.gap = cssLen(v); }
         "justify-content" => {
             match (v.toLower()) {
@@ -464,6 +576,7 @@ function cssApplyProp(st0: TuiStyle, p: string, v: string): TuiStyle {
         "min-height" => { st.minH = cssLen(v); }
         "max-height" => { st.maxH = cssLen(v); }
         "text-decoration" => { st.underline = v.toLower().contains("underline"); }
+        "icon-size" => { st.iconSize = cssLen(v); }
         "box-shadow" => {
             let lv = v.toLower();
             if (lv == "none") { st.shadow = false; }
@@ -495,21 +608,65 @@ function cssKindTag(kind: int): string {
     return "progress";
 }
 
-function cssRuleMatches(r: &TuiRule, w: long, hovered: bool): bool {
-    if (r.hover && !hovered) { return false; }
-    if (r.tag != "" && r.tag != cssKindTag(uiKind[w])) { return false; }
-    if (r.idName != "" && r.idName != uiIdName[w]) { return false; }
-    for (c in r.classes) {
+// does one compound selector match element `w` in the given pseudo-states?
+function cssMatchSimple(s: &TuiSimple, w: long,
+                        hovered: bool, focused: bool, active: bool): bool {
+    if (s.hover && !hovered) { return false; }
+    if (s.focus && !focused) { return false; }
+    if (s.active && !active) { return false; }
+    if (s.tag != "" && s.tag != cssKindTag(uiKind[w])) { return false; }
+    if (s.idName != "" && s.idName != uiIdName[w]) { return false; }
+    for (c in s.classes) {
         if (!uiHasClass(w, c)) { return false; }
+    }
+    return true;
+}
+function cssRuleMatches(r: &TuiRule, w: long, hovered: bool,
+                        focused: bool, active: bool): bool {
+    // @media constraints
+    if (r.mMinW >= 0.0 && uiWinW < r.mMinW) { return false; }
+    if (r.mMaxW >= 0.0 && uiWinW > r.mMaxW) { return false; }
+    if (r.mMinH >= 0.0 && uiWinH < r.mMinH) { return false; }
+    if (r.mMaxH >= 0.0 && uiWinH > r.mMaxH) { return false; }
+
+    let np = r.parts.len();
+    // the last compound matches the element itself
+    if (!cssMatchSimple(&r.parts[np - 1L], w, hovered, focused, active)) { return false; }
+    if (np == 1L) { return true; }
+
+    // walk the ancestor chain right-to-left through the earlier compounds
+    let cur = w;
+    let pi = np - 2L;
+    while (pi >= 0L) {
+        if (r.parts[pi].child) {                  // `>` : must be the direct parent
+            let parent = uiParent[cur];
+            if (parent < 0L) { return false; }
+            if (!cssMatchSimple(&r.parts[pi], parent, uiPointInside(parent),
+                                uiFocusId == parent, uiPressedId == parent)) { return false; }
+            cur = parent;
+        } else {                                   // descendant: any ancestor
+            let anc = uiParent[cur];
+            let found = -1L;
+            while (anc >= 0L) {
+                if (cssMatchSimple(&r.parts[pi], anc, uiPointInside(anc),
+                                   uiFocusId == anc, uiPressedId == anc)) { found = anc; break; }
+                anc = uiParent[anc];
+            }
+            if (found < 0L) { return false; }
+            cur = found;
+        }
+        pi -= 1L;
     }
     return true;
 }
 
 // cascade: matching rules applied in (specificity, source order) order
 function cssCompute(w: long, hovered: bool): TuiStyle {
+    let focused = uiFocusId == w;
+    let active = uiPressedId == w;
     let matched: Vec<long> = Vec();
     for (ri in 0L..cssRules.len()) {
-        if (cssRuleMatches(&cssRules[ri], w, hovered)) { matched.push(ri); }
+        if (cssRuleMatches(&cssRules[ri], w, hovered, focused, active)) { matched.push(ri); }
     }
     // stable insertion sort by specificity (equal spec keeps source order)
     let i: long = 1L;

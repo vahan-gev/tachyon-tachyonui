@@ -31,6 +31,9 @@ static mut uiGroup: Vec<string> = Vec();        // radio group name
 static mut uiVal: Vec<double> = Vec();          // slider / progress value (0..1)
 static mut uiScrollY: Vec<double> = Vec();      // scroll offset for overflow boxes
 static mut uiContentH: Vec<double> = Vec();     // measured full content height (for scroll)
+static mut uiIcon: Vec<string> = Vec();         // icon image path drawn before text ("" = none)
+static mut uiOptions: Vec<Vec<string>> = Vec(); // dropdown options (kind 11)
+static mut uiOpenSelect: long = -1L;            // the currently-open dropdown, or -1
 
 static mut uiRootId: long = -1L;
 static mut uiMouseX: double = -1.0;
@@ -47,6 +50,8 @@ static mut uiKeyFns: Vec<(int) => void> = Vec();
 
 static mut uiLastFrameMs: double = -1.0;        // §animation clock (nowMillis)
 static mut uiAnimating: bool = false;           // any widget mid-transition this frame
+static mut uiWinW: double = 0.0;                // current window size (for @media)
+static mut uiWinH: double = 0.0;
 
 // ---- construction ----
 function uiInit(title: string, w: int, h: int): void {
@@ -79,6 +84,9 @@ function uiNew(kind: int, text: string): long {
     uiVal.push(0.0);
     uiScrollY.push(0.0);
     uiContentH.push(0.0);
+    uiIcon.push("");
+    let opts: Vec<string> = Vec();
+    uiOptions.push(opts);
     return id;
 }
 
@@ -136,6 +144,34 @@ function uiDivider(): long {
     uiAddClass(id, "hr");
     return id;
 }
+
+/// Give any text element (button, label, link) an icon image drawn before its
+/// text. Pass "" to remove it. Size it with the CSS `icon-size` property.
+function uiSetIcon(id: long, path: string): void {
+    uiIcon[id] = path;
+    tui_redraw();
+}
+function uiGetIcon(id: long): string { return uiIcon[id]; }
+
+/// A button with an icon and a label. Pass "" for `text` to make it icon-only.
+function uiIconButton(text: string, iconPath: string): long {
+    let id = uiButton(text);
+    uiIcon[id] = iconPath;
+    return id;
+}
+
+/// A dropdown/select. Clicking it opens a list of `options`; picking one sets
+/// the value and fires onChange. `uiSelectValue` reads the current selection.
+function uiSelect(options: Vec<string>): long {
+    let id = uiNew(11, "");
+    if (options.len() > 0L) { uiText[id] = options[0].clone(); }
+    uiOptions[id] = options;
+    return id;
+}
+function uiSelectValue(id: long): string { return uiText[id]; }
+function uiSetSelectValue(id: long, s: string): void { uiText[id] = s; tui_redraw(); }
+
+function uiOptionRowH(): double { return 30.0; }
 
 function uiAppend(parent: long, child: long): void {
     uiChildren[parent].push(child);
@@ -454,10 +490,13 @@ function uiEffectiveCursor(id: long): int {  // inherit cursor up the tree
 function tuiRender(w: int, h: int): void {
     tui_clear(1.0, 1.0, 1.0);
     if (uiRootId < 0L) { return; }
+    uiWinW = w as double;                     // for @media queries
+    uiWinH = h as double;
     uiComputeStyles();                        // target styles
     uiAdvanceAnim();                          // ease displayed styles toward them
     uiLayoutRoot(w as double, h as double);   // layout from target geometry
     uiPaint(uiRootId, 1.0);                   // paint from the eased styles
+    if (uiOpenSelect >= 0L) { uiPaintSelectPopup(uiOpenSelect); }   // dropdown on top
     if (uiAnimating) { tui_request_frame(); } // keep going while anything moves
 }
 
@@ -500,10 +539,41 @@ function tuiMouseDown(x: double, y: double): void {
     }
 }
 
+// which option row of the open dropdown is under the mouse (-1 = none)
+function uiSelectPopupOption(): long {
+    if (uiOpenSelect < 0L) { return -1L; }
+    let sel = uiOpenSelect;
+    let px = uiX[sel];
+    let py = uiY[sel] + uiH[sel];
+    let pw = uiW[sel];
+    let rowH = uiOptionRowH();
+    let nopt = uiOptions[sel].len();
+    if (uiMouseX < px || uiMouseX > px + pw ||
+        uiMouseY < py || uiMouseY > py + rowH * (nopt as double)) {
+        return -1L;
+    }
+    return ((uiMouseY - py) / rowH) as long;
+}
+
 @export
 function tuiMouseUp(x: double, y: double): void {
     uiMouseX = x;
     uiMouseY = y;
+
+    // an open dropdown intercepts the click
+    if (uiOpenSelect >= 0L) {
+        let sel = uiOpenSelect;
+        let opt = uiSelectPopupOption();
+        uiOpenSelect = -1L;
+        if (opt >= 0L && opt < uiOptions[sel].len()) {
+            uiText[sel] = uiOptions[sel][opt].clone();
+            uiFireChange(sel);
+        }
+        uiPressedId = -1L;
+        tui_redraw();
+        return;
+    }
+
     let t = uiHitTest();
     if (t >= 0L && uiPressedId >= 0L) {
         // focus: clicking an input/textarea focuses it; clicking anything else blurs
@@ -524,6 +594,9 @@ function tuiMouseUp(x: double, y: double): void {
             uiFireChange(t);
         } else if (uiKind[t] == 9) {          // link: navigate
             uiNavigate(uiHref[t]);
+        } else if (uiKind[t] == 11) {         // select: open the dropdown
+            uiOpenSelect = t;
+            tui_redraw();
         }
         // onClick: nearest self-or-ancestor handler
         let hi = uiFindHandler(t);
@@ -607,4 +680,28 @@ function tuiTextInput(cp: int): void {
     uiCaret[id] = uiCaret[id] + 1L;
     uiFireChange(id);
     tui_redraw();
+}
+
+// Cmd/Ctrl shortcut on the focused field: 1 copy, 2 paste, 3 cut.
+// (No text selection yet, so copy/cut operate on the whole value.)
+@export
+function tuiCommand(action: int): void {
+    if (uiFocusId < 0L || !uiIsFocusable(uiFocusId)) { return; }
+    let id = uiFocusId;
+    if (action == 1) {                               // copy
+        tui_clipboard_set(uiText[id]);
+    } else if (action == 3) {                        // cut
+        tui_clipboard_set(uiText[id]);
+        uiText[id] = "";
+        uiCaret[id] = 0L;
+        uiFireChange(id);
+        tui_redraw();
+    } else if (action == 2) {                        // paste at the caret
+        let clip = tui_clipboard_get();
+        let n = clip.charLen();
+        uiText[id] = uiStrInsert(uiText[id], uiCaret[id], clip);
+        uiCaret[id] = uiCaret[id] + n;
+        uiFireChange(id);
+        tui_redraw();
+    }
 }

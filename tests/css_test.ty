@@ -540,3 +540,136 @@ function routing(): void {
     assertEq(uiCurrentRoute(), "/t24users/7");
     assertEq(uiRouteParam("id"), "7");
 }
+
+// ---- v0.4: icons, pseudo-classes, combinators, @media, wrap, select --------
+
+@test
+function iconWidening(): void {
+    // an icon adds to a text element's measured width
+    let plain = uiButton("Save");
+    uiSetId(plain, "t25a");
+    let iconed = uiIconButton("Save", "/tmp/tachyon_test_img.png");
+    uiSetId(iconed, "t25b");
+    let root = uiBox(); uiAppend(root, plain); uiAppend(root, iconed);
+    uiSetRoot(root);
+    uiComputeStyles();
+    uiLayoutRoot(600.0, 200.0);
+    assert(uiW[iconed] > uiW[plain]);          // icon + gap widens it
+    assertEq(uiGetIcon(iconed), "/tmp/tachyon_test_img.png");
+}
+
+@test
+function focusAndActivePseudo(): void {
+    let inp = uiInput("");
+    uiSetId(inp, "t26inp");
+    cssParse("#t26inp { border-color: #cccccc; } "
+             + "#t26inp:focus { border-color: #ff0000; } "
+             + "#t26inp:active { border-color: #00ff00; }");
+    // no state
+    assert(cssCompute(inp, false).boR < 0.9);
+    // focused -> red border
+    uiFocusId = inp;
+    assertEq(cssCompute(inp, false).boR, 1.0);
+    assertEq(cssCompute(inp, false).boG, 0.0);
+    uiFocusId = -1L;
+    // pressed -> green border
+    uiPressedId = inp;
+    assertEq(cssCompute(inp, false).boG, 1.0);
+    uiPressedId = -1L;
+}
+
+@test
+function descendantAndChildSelectors(): void {
+    let card = uiBox(); uiAddClass(card, "t27card");
+    let mid = uiBox(); uiAddClass(mid, "t27mid");
+    let title = uiLabel("hi"); uiAddClass(title, "t27title");
+    uiAppend(card, mid); uiAppend(mid, title);
+    uiSetRoot(card);
+
+    // descendant: .t27card .t27title matches (title is a deep descendant)
+    cssParse(".t27card .t27title { color: #ff0000; }");
+    assertEq(cssCompute(title, false).fgR, 1.0);
+
+    // child: .t27card > .t27title should NOT match (title is a grandchild)
+    let other = uiLabel("x"); uiAddClass(other, "t27direct");
+    uiAppend(card, other);                     // a direct child of the card
+    cssParse(".t27card > .t27direct { color: #00ff00; } "
+             + ".t27card > .t27title { color: #0000ff; }");
+    assertEq(cssCompute(other, false).fgG, 1.0);   // direct child matches
+    assertEq(cssCompute(title, false).fgB, 0.0);   // grandchild: child combinator fails
+}
+
+@test
+function mediaQueries(): void {
+    let b = uiBox(); uiAddClass(b, "t28m");
+    cssParse(".t28m { width: 50px; } "
+             + "@media (min-width: 600px) { .t28m { width: 300px; } }");
+    uiWinW = 800.0; uiWinH = 600.0;
+    assertEq(cssCompute(b, false).width, 300.0);   // wide window: media applies
+    uiWinW = 400.0;
+    assertEq(cssCompute(b, false).width, 50.0);    // narrow: media does not apply
+    uiWinW = 0.0; uiWinH = 0.0;
+}
+
+@test
+function flexWrap(): void {
+    let root = uiBox(); uiSetId(root, "t29root");
+    for (i in 0..3) {
+        let chip = uiBox(); uiAddClass(chip, "t29chip");
+        uiAppend(root, chip);
+    }
+    // three 100px chips in a 250px row with wrap -> 2 on row 1, 1 on row 2
+    cssParse("#t29root { flex-direction: row; flex-wrap: wrap; gap: 0px; padding: 0px; } "
+             + ".t29chip { width: 100px; height: 20px; }");
+    uiSetRoot(root);
+    uiComputeStyles();
+    uiLayoutRoot(250.0, 200.0);
+    let a = uiChildren[root][0L];
+    let b = uiChildren[root][1L];
+    let c = uiChildren[root][2L];
+    assertEq(uiY[a], 0.0);
+    assertEq(uiY[b], 0.0);                      // b fits on the first row
+    assertEq(uiX[c], 0.0);                      // c wrapped to the next row
+    assertEq(uiY[c], 20.0);
+}
+
+@test
+function selectDropdown(): void {
+    let sel = uiSelect(Vec.of("red", "green", "blue"));
+    uiSetId(sel, "t30sel");
+    let root = uiBox(); uiAppend(root, sel);
+    cssParse("#t30sel { width: 120px; height: 32px; }");
+    uiSetRoot(root);
+    uiComputeStyles();
+    uiLayoutRoot(300.0, 300.0);
+    assertEq(uiSelectValue(sel), "red");        // first option by default
+
+    // click to open
+    tuiMouseDown(uiX[sel] + 5.0, uiY[sel] + 5.0);
+    tuiMouseUp(uiX[sel] + 5.0, uiY[sel] + 5.0);
+    assertEq(uiOpenSelect, sel);
+
+    // pick option index 1 (green): popup row 1, centered
+    let py = uiY[sel] + uiH[sel];
+    let rowH = uiOptionRowH();
+    tuiMouseUp(uiX[sel] + 5.0, py + rowH * 1.0 + rowH / 2.0);
+    assertEq(uiOpenSelect, -1L);                // closed after pick
+    assertEq(uiSelectValue(sel), "green");
+}
+
+@test
+function clipboardPaste(): void {
+    tui_clipboard_set("pasted!");
+    let inp = uiInput("");
+    uiFocus(inp);
+    tuiTextInput(97);                           // 'a'
+    tuiCommand(2);                              // paste at caret (after 'a')
+    assertEq(uiValue(inp), "apasted!");
+
+    tuiCommand(1);                              // copy the whole value
+    assertEq(tui_clipboard_get(), "apasted!");
+
+    tuiCommand(3);                              // cut clears it
+    assertEq(uiValue(inp), "");
+    uiBlur();
+}

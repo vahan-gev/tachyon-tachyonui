@@ -28,6 +28,17 @@ function uiTextOf(id: long): string {       // the text a widget measures/paints
     return uiText[id];
 }
 
+// icons live on button (2), label (1) and link (9)
+function uiHasIcon(id: long): bool {
+    let k = uiKind[id];
+    return uiIcon[id].len() > 0L && (k == 1 || k == 2 || k == 9);
+}
+function uiIconDim(id: long, st: TuiStyle): double {
+    if (st.iconSize > 0.0) { return st.iconSize; }
+    return tui_text_height(st.fontSize);    // square, ~line height
+}
+function uiIconGap(): double { return 6.0; }
+
 // break `text` into display lines that fit `maxW`. Honors explicit '\n'. With
 // nowrap or maxW <= 0, only splits on newlines.
 function uiWrapLines(text: string, maxW: double, fontSize: double,
@@ -72,8 +83,12 @@ function uiMeasureW(id: long): double {
     if (!st.widthPct && st.width >= 0.0) { return uiClampW(st, st.width); }
     let k = uiKind[id];
     if (uiIsText(k)) {
-        return uiClampW(st, tui_text_width(uiTextOf(id), st.fontSize, uiBoldInt(st))
-                             + st.padL + st.padR);
+        let tw = tui_text_width(uiTextOf(id), st.fontSize, uiBoldInt(st));
+        if (uiHasIcon(id)) {
+            tw += uiIconDim(id, st);
+            if (uiTextOf(id).len() > 0L) { tw += uiIconGap(); }
+        }
+        return uiClampW(st, tw + st.padL + st.padR);
     }
     if (k == 3) { return uiClampW(st, tui_image_width(uiText[id]) + st.padL + st.padR); }
     if (k == 5 || k == 7) { return uiClampW(st, 16.0 + st.padL + st.padR); }   // checkbox/radio
@@ -200,6 +215,13 @@ function uiArrange(id: long, x: double, y: double, w: double, h: double): void {
         else { totalMain += chei + cs.marT + cs.marB; }
     }
 
+    // flex-wrap: pack children onto multiple lines/columns, then place absolutes
+    if (st.wrap && n > 0L) {
+        uiArrangeWrap(id, cx, cy, cw, chh, kids, ws, hs);
+        for (c in abs) { uiArrangeAbsolute(id, c, cx, cy, cw, chh); }
+        return;
+    }
+
     let gaps = 0.0;
     if (n > 1L) { gaps = st.gap * ((n - 1L) as double); }
     let contentMain = totalMain + gaps;
@@ -248,18 +270,64 @@ function uiArrange(id: long, x: double, y: double, w: double, h: double): void {
     }
 
     // absolutely-positioned children: placed within this box's content area
-    for (c in abs) {
-        let cs = uiStyle[c];
-        let awid = uiChildW(c, st, cw);
-        let ahei = if (cs.height >= 0.0) cs.height else uiMeasureHAt(c, awid - cs.padL - cs.padR);
-        ahei = uiClampH(cs, ahei);
-        let ax = cx;
-        if (cs.posL > -99999.0) { ax = cx + cs.posL; }
-        else if (cs.posR > -99999.0) { ax = cx + cw - awid - cs.posR; }
-        let ay = cy;
-        if (cs.posT > -99999.0) { ay = cy + cs.posT; }
-        else if (cs.posB > -99999.0) { ay = cy + chh - ahei - cs.posB; }
-        uiArrange(c, ax, ay, awid, ahei);
+    for (c in abs) { uiArrangeAbsolute(id, c, cx, cy, cw, chh); }
+}
+
+// place one absolutely-positioned child within the parent's content box
+function uiArrangeAbsolute(parent: long, c: long, cx: double, cy: double,
+                           cw: double, chh: double): void {
+    let st = uiStyle[parent];
+    let cs = uiStyle[c];
+    let awid = uiChildW(c, st, cw);
+    let ahei = if (cs.height >= 0.0) cs.height else uiMeasureHAt(c, awid - cs.padL - cs.padR);
+    ahei = uiClampH(cs, ahei);
+    let ax = cx;
+    if (cs.posL > -99999.0) { ax = cx + cs.posL; }
+    else if (cs.posR > -99999.0) { ax = cx + cw - awid - cs.posR; }
+    let ay = cy;
+    if (cs.posT > -99999.0) { ay = cy + cs.posT; }
+    else if (cs.posB > -99999.0) { ay = cy + chh - ahei - cs.posB; }
+    uiArrange(c, ax, ay, awid, ahei);
+}
+
+// flex-wrap: pack children onto multiple lines (row) or columns (column),
+// starting a new line when the next child would overflow the main axis.
+function uiArrangeWrap(id: long, cx: double, cy: double, cw: double, chh: double,
+                       kids: Vec<long>, ws: Vec<double>, hs: Vec<double>): void {
+    let st = uiStyle[id];
+    let n = kids.len();
+    if (st.row) {
+        let mx = cx;
+        let lineY = cy;
+        let lineMaxH = 0.0;
+        for (i in 0L..n) {
+            let cs = uiStyle[kids[i]];
+            if (mx > cx && mx + ws[i] > cx + cw + 0.5) {   // wrap to a new row
+                mx = cx;
+                lineY += lineMaxH + st.gap;
+                lineMaxH = 0.0;
+            }
+            uiArrange(kids[i], mx + cs.marL, lineY + cs.marT, ws[i], hs[i]);
+            mx += cs.marL + ws[i] + cs.marR + st.gap;
+            let ch = hs[i] + cs.marT + cs.marB;
+            if (ch > lineMaxH) { lineMaxH = ch; }
+        }
+    } else {
+        let my = cy;
+        let colX = cx;
+        let colMaxW = 0.0;
+        for (i in 0L..n) {
+            let cs = uiStyle[kids[i]];
+            if (my > cy && my + hs[i] > cy + chh + 0.5) {  // wrap to a new column
+                my = cy;
+                colX += colMaxW + st.gap;
+                colMaxW = 0.0;
+            }
+            uiArrange(kids[i], colX + cs.marL, my + cs.marT, ws[i], hs[i]);
+            my += cs.marT + hs[i] + cs.marB + st.gap;
+            let cwid = ws[i] + cs.marL + cs.marR;
+            if (cwid > colMaxW) { colMaxW = cwid; }
+        }
     }
 }
 

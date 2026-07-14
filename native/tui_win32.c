@@ -76,6 +76,7 @@ extern void tuiResize(int32_t w, int32_t h);
 extern void tuiKeyDown(int32_t keycode);
 extern void tuiTextInput(int32_t codepoint);
 extern void tuiWheel(double dx, double dy);
+extern void tuiCommand(int32_t action);
 
 #define TUI_FRAME_TIMER 0x7ACF
 #define TUI_AUTOQUIT_TIMER 0x7ACE
@@ -146,6 +147,11 @@ static LRESULT CALLBACK tui_wndproc(HWND h, UINT msg, WPARAM wp, LPARAM lp) {
             tuiMouseUp((double)(short)LOWORD(lp), (double)(short)HIWORD(lp));
             return 0;
         case WM_KEYDOWN: {
+            if (GetKeyState(VK_CONTROL) & 0x8000) {   /* Ctrl+C/V/X */
+                if (wp == 'C') { tuiCommand(1); return 0; }
+                if (wp == 'V') { tuiCommand(2); return 0; }
+                if (wp == 'X') { tuiCommand(3); return 0; }
+            }
             int32_t k = 0;
             switch (wp) {
                 case VK_BACK:   k = 8;  break;
@@ -252,6 +258,36 @@ void tui_rotate(double deg) {
 void tui_clip(double x, double y, double w, double h) {
     /* intersect with the current clip so nested scroll regions compose */
     if (g_gfx) GdipSetClipRect(g_gfx, (float)x, (float)y, (float)w, (float)h, 1 /*intersect*/);
+}
+
+/* ---------- clipboard ---------- */
+static char g_clip[8192];
+const char* tui_clipboard_get(void) {
+    g_clip[0] = 0;
+    if (!OpenClipboard(g_hwnd)) return g_clip;
+    HANDLE h = GetClipboardData(CF_UNICODETEXT);
+    if (h) {
+        WCHAR* w = (WCHAR*)GlobalLock(h);
+        if (w) {
+            WideCharToMultiByte(CP_UTF8, 0, w, -1, g_clip, sizeof g_clip - 1, 0, 0);
+            GlobalUnlock(h);
+        }
+    }
+    CloseClipboard();
+    return g_clip;
+}
+void tui_clipboard_set(const char* s) {
+    if (!OpenClipboard(g_hwnd)) return;
+    EmptyClipboard();
+    int n = MultiByteToWideChar(CP_UTF8, 0, s ? s : "", -1, 0, 0);
+    HGLOBAL h = GlobalAlloc(GMEM_MOVEABLE, (size_t)n * sizeof(WCHAR));
+    if (h) {
+        WCHAR* w = (WCHAR*)GlobalLock(h);
+        MultiByteToWideChar(CP_UTF8, 0, s ? s : "", -1, w, n);
+        GlobalUnlock(h);
+        SetClipboardData(CF_UNICODETEXT, h);
+    }
+    CloseClipboard();
 }
 
 /* ---------- drawing ---------- */

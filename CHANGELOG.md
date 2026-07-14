@@ -1,5 +1,28 @@
 # Changelog
 
+## 0.4.0
+
+**Icons & images on elements**
+- `uiSetIcon(id, path)` gives any button/label/link an icon before its text;
+  `uiIconButton(text, icon)` (pass `""` text for icon-only). CSS `icon-size`.
+
+**More CSS selectors**
+- `:focus` and `:active` pseudo-classes (in addition to `:hover`).
+- **Descendant** (`.card .title`) and **child** (`.card > .title`) combinators.
+- **`@media`** queries: `@media (min-width|max-width|min-height|max-height: N) { … }`.
+
+**Layout**
+- `flex-wrap: wrap` — children wrap onto multiple lines (row) or columns.
+
+**New control**
+- `uiSelect(options)` — a dropdown: click to open an overlay list, pick to set
+  the value (fires `onChange`). `uiSelectValue` / `uiSetSelectValue`.
+
+**Clipboard**
+- System clipboard copy/paste/cut in text fields via Cmd/Ctrl+C/V/X
+  (`tui_clipboard_get`/`set`; real NSPasteboard/Win32 clipboard, process-local
+  on X11).
+
 ## 0.3.0
 
 **Pages & routing** (`src/route.ty`)

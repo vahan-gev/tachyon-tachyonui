@@ -26,6 +26,7 @@ extern void tuiResize(int32_t w, int32_t h);
 extern void tuiKeyDown(int32_t keycode);
 extern void tuiTextInput(int32_t codepoint);   // a typed printable character
 extern void tuiWheel(double dx, double dy);    // scroll wheel / trackpad
+extern void tuiCommand(int32_t action);        // 1 copy, 2 paste, 3 cut
 
 static NSWindow* g_window = nil;
 static NSView* g_view = nil;
@@ -81,6 +82,14 @@ enum { TUI_KEY_BACKSPACE = 8, TUI_KEY_TAB = 9, TUI_KEY_ENTER = 13,
     tuiWheel(-e.scrollingDeltaX * m, -e.scrollingDeltaY * m);
 }
 - (void)keyDown:(NSEvent*)e {
+    // Cmd+C/V/X are clipboard commands, not text input
+    if (e.modifierFlags & NSEventModifierFlagCommand) {
+        NSString* c = e.charactersIgnoringModifiers.lowercaseString;
+        if ([c isEqualToString:@"c"]) { tuiCommand(1); return; }
+        if ([c isEqualToString:@"v"]) { tuiCommand(2); return; }
+        if ([c isEqualToString:@"x"]) { tuiCommand(3); return; }
+        return;
+    }
     NSString* chars = e.characters;
     if (chars.length == 0) { tuiKeyDown((int32_t)e.keyCode); return; }
     for (NSUInteger i = 0; i < chars.length; i++) {
@@ -195,6 +204,21 @@ void tui_rotate(double deg) {
 }
 void tui_clip(double x, double y, double w, double h) {
     NSRectClip(NSMakeRect(x, y, w, h));
+}
+
+/* ---------- clipboard ---------- */
+static char g_clip[8192];
+const char* tui_clipboard_get(void) {
+    NSString* s = [[NSPasteboard generalPasteboard] stringForType:NSPasteboardTypeString];
+    if (!s) { g_clip[0] = 0; return g_clip; }
+    strncpy(g_clip, s.UTF8String, sizeof g_clip - 1);
+    g_clip[sizeof g_clip - 1] = 0;
+    return g_clip;
+}
+void tui_clipboard_set(const char* s) {
+    NSPasteboard* pb = [NSPasteboard generalPasteboard];
+    [pb clearContents];
+    [pb setString:[NSString stringWithUTF8String:s ? s : ""] forType:NSPasteboardTypeString];
 }
 
 /* ---------- drawing (valid inside tuiRender) ---------- */
